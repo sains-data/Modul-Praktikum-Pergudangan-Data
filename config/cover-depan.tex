@@ -1,0 +1,77 @@
+%% -----------------------------------------------------------------------------
+%% Sampul depan modul praktikum Pergudangan Data
+%% Dihasilkan dari 03_branding/cover-dw-01.svg untuk kanvas A4 (595.28 x 841.89 pt).
+%%
+%% Seluruh koordinat diambil langsung dari berkas SVG, lalu diskalakan dengan
+%% faktor 1.19318 = 595.276 / 498.9 sehingga lebar kanvas SVG tepat memenuhi
+%% lebar A4. Sisa tinggi 3.67 pt dibagi rata sebagai bleed atas dan bawah.
+%%
+%% Prasyarat: paket tikz, dan palet DW* yang didefinisikan di config/theme.tex.
+%% -----------------------------------------------------------------------------
+
+% Sengaja tidak memakai environment titlepage: environment itu mengembalikan
+% penghitung halaman ke 1, sehingga hyperref menemukan dua jangkar "page.i".
+\newcommand{\SampulDepan}{%
+  \thispagestyle{empty}%
+  \null%
+  \begin{tikzpicture}[remember picture,overlay,shift={(current page.north west)}]
+    \fill[DWWhite] (0,0) rectangle (\paperwidth,-\paperheight);
+
+  %% --- pita pucat (rect dan polygon opacity .3 pada berkas SVG) ---
+  \begin{scope}[fill=DWPeach,fill opacity=0.30]
+    \fill (47.89pt,1.83pt) rectangle (91.28pt,-566.17pt);
+    \fill (110.26pt,1.83pt) rectangle (131.95pt,-566.17pt);
+    \fill (378.07pt,-843.72pt) -- (334.69pt,-843.72pt) -- (47.89pt,-566.17pt) -- (91.28pt,-566.17pt) -- (378.07pt,-843.72pt) -- cycle;
+    \fill (418.29pt,-843.72pt) -- (396.60pt,-843.72pt) -- (110.26pt,-566.17pt) -- (131.97pt,-566.17pt) -- (418.29pt,-843.72pt) -- cycle;
+  \end{scope}
+
+  %% --- belah ketupat (persegi bersudut tumpul, rotasi 45 derajat) ---
+  \node[fill=DWOrange,minimum size=137.41pt,rounded corners=9.03pt,rotate=45,inner sep=0pt] at (76.70pt,-723.95pt) {};
+  \node[fill=DWButter,minimum size=137.41pt,rounded corners=9.03pt,rotate=45,inner sep=0pt] at (132.16pt,-870.92pt) {};
+  \node[fill=DWPeach,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (121.91pt,-624.55pt) {};
+  \node[fill=DWSage,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (173.57pt,-768.36pt) {};
+  \node[fill=DWOrange,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (215.27pt,-725.81pt) {};
+  \node[fill=DWOrange,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (102.26pt,-581.96pt) {};
+  \node[fill=DWSage,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (123.59pt,-561.04pt) {};
+  \node[fill=DWButter,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (195.61pt,-683.55pt) {};
+  \node[fill=DWButter,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (273.67pt,-725.80pt) {};
+  \node[fill=DWOrange,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (312.42pt,-726.90pt) {};
+  \node[fill=DWPeach,minimum size=80.24pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (-28.25pt,-782.01pt) {};
+  \node[fill=DWSage,minimum size=80.24pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (-28.25pt,-665.89pt) {};
+  \node[fill=DWButter,minimum size=137.41pt,rounded corners=9.03pt,rotate=45,inner sep=0pt] at (518.58pt,-117.94pt) {};
+  \node[fill=DWSage,minimum size=137.41pt,rounded corners=9.03pt,rotate=45,inner sep=0pt] at (463.11pt,29.03pt) {};
+  \node[fill=DWSage,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (562.68pt,-217.34pt) {};
+  \node[fill=DWOrange,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (421.71pt,-73.53pt) {};
+  \node[fill=DWButter,minimum size=54.39pt,rounded corners=3.58pt,rotate=45,inner sep=0pt] at (380.00pt,-116.08pt) {};
+  \node[fill=DWButter,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (585.54pt,-259.94pt) {};
+  \node[fill=DWPeach,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (564.19pt,-280.85pt) {};
+  \node[fill=DWSage,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (399.65pt,-158.35pt) {};
+  \node[fill=DWOrange,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (321.61pt,-116.09pt) {};
+  \node[fill=DWPeach,minimum size=25.18pt,rounded corners=1.65pt,rotate=45,inner sep=0pt] at (399.99pt,-196.09pt) {};
+  \node[fill=DWOrange,minimum size=80.25pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (623.53pt,-59.88pt) {};
+  \node[fill=DWPeach,minimum size=80.25pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (623.53pt,-176.00pt) {};
+  \node[fill=DWPeach,minimum size=80.24pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (638.62pt,-59.88pt) {};
+  \node[fill=DWSage,minimum size=80.24pt,rounded corners=5.27pt,rotate=45,inner sep=0pt] at (638.62pt,-176.00pt) {};
+
+    %% --- logo institusi ---------------------------------------------------
+    \node[anchor=north west,inner sep=0pt] at (131.95pt,-87.65pt)
+      {\sampullogo{Logo_ITERA.png}{76.37pt}};
+    \node[anchor=north west,inner sep=0pt] at (205.88pt,-87.65pt)
+      {\sampullogo{LOGO-SAINSDATA.png}{70.98pt}};
+
+    %% --- blok judul -------------------------------------------------------
+    \node[anchor=base west,inner sep=0pt,text=DWOrange,
+          font=\fontsize{28.6}{28.6}\selectfont\bfseries]
+      at (56.93pt,-339.85pt) {\sampulspasi{\jenisdokumen}};
+    \node[anchor=base west,inner sep=0pt,text=DWInk,
+          font=\fontsize{42.9}{42.9}\selectfont\bfseries]
+      at (54.21pt,-385.24pt) {\MakeUppercase{\coursename}};
+
+    %% --- afiliasi ---------------------------------------------------------
+    \node[anchor=base west,inner sep=0pt,text=DWInk,align=left,
+          font=\fontsize{23.9}{28.6}\selectfont\bfseries]
+      at (205.88pt,-611.16pt)
+      {\programname\\\facultyname\\\universityname};
+  \end{tikzpicture}%
+  \clearpage%
+}

@@ -1,0 +1,61 @@
+# =============================================================================
+# Dokumentasi dan pengujian lapis mart.
+#
+# Deskripsi ditulis di sini, di sebelah modelnya -- bukan pada dokumen
+# terpisah yang akan basi dalam hitungan minggu. Isinya muncul apa adanya pada
+# situs yang dihasilkan `dbt docs generate`.
+# =============================================================================
+version: 2
+
+models:
+  - name: dim_produk
+    description: >
+      Dimensi produk SCD Type 2. Satu produk dapat memiliki beberapa baris,
+      masing-masing berlaku pada rentang [mulai_berlaku, selesai_berlaku).
+      Memuat baris unknown berkunci -1.
+    columns:
+      - name: produk_key
+        description: Surrogate key. Berbeda untuk setiap versi produk.
+        tests:
+          - unique
+          - not_null
+      - name: produk_id
+        description: >
+          Natural key dari sistem sumber. SENGAJA tidak unik -- satu produk
+          punya beberapa versi. Uji unique dipasang pada produk_key.
+        tests:
+          - not_null
+      - name: kategori
+        description: Kategori yang sudah distandardisasi lintas tiga sumber.
+
+  - name: dim_audit
+    description: >
+      Audit dimension. Menghubungkan setiap baris fakta ke batch pemuatan yang
+      menghasilkannya, sehingga pemuatan ulang dapat dibatasi pada batch yang
+      bermasalah saja.
+    columns:
+      - name: audit_key
+        tests:
+          - unique
+          - not_null
+      - name: status_mutu
+        description: Ringkasan kelengkapan batch.
+        tests:
+          - accepted_values:
+              values: ['lengkap', 'ada selisih', 'gagal', 'tidak diketahui']
+
+  # TODO (dikerjakan mahasiswa): tambahkan blok untuk dim_toko dan
+  # fct_penjualan.
+  #
+  # Untuk fct_penjualan, pasang sekurang-kurangnya:
+  #   - not_null pada transaksi_id dan seluruh kunci dimensi
+  #   - relationships dari produk_key ke ref('dim_produk')
+  #
+  # Contoh bentuk uji relationships:
+  #
+  #   - name: produk_key
+  #     tests:
+  #       - not_null
+  #       - relationships:
+  #           to: ref('dim_produk')
+  #           field: produk_key

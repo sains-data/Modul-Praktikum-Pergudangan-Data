@@ -1,0 +1,87 @@
+% !TeX program = pdflatex
+% !TeX encoding = UTF-8
+% Compile: latexmk -pdf main.tex
+%
+% -----------------------------------------------------------------------------
+% Modul Praktikum -- Pergudangan Data (SD25-31007)
+% Program Studi Sains Data, Fakultas Sains, Institut Teknologi Sumatera
+%
+% Sampul depan dan belakang direproduksi dalam TikZ dari
+%   ../03_branding/cover-dw-01.svg  (sampul depan)
+%   ../03_branding/cover-dw-02.svg  (sampul belakang)
+% sehingga teks sampul tetap hidup dan dapat disunting lewat config/metadata.tex.
+% -----------------------------------------------------------------------------
+
+\documentclass[a4paper,11pt,oneside]{report}
+
+\input{config/packages}
+\input{config/theme}
+\input{config/metadata}
+\input{config/commands}
+\input{config/cover-depan}
+\input{config/cover-belakang}
+
+\begin{document}
+
+% --- sampul depan -----------------------------------------------------------
+% Penomoran roman dimulai sebelum sampul agar hyperref tidak menemukan dua
+% jangkar halaman dengan nama yang sama.
+\pagenumbering{roman}
+\SampulDepan
+
+% --- bagian awal ------------------------------------------------------------
+% Urutan mengikuti kelaziman buku ajar: judul, hak cipta, kata pengantar,
+% daftar isi, lalu pendahuluan.
+\input{section/00a-halaman-judul}
+\input{section/00b-hak-cipta}
+\input{section/00c-kata-pengantar}
+\input{section/00-daftar-isi}
+
+% Bab bagian awal bernomor HURUF: Bagian A sampai D, dengan seksi A.1, A.2, dan
+% seterusnya. Penomoran 0.1 dihindari karena menyiratkan adanya bab bernomor
+% nol yang sebenarnya tidak ada.
+\renewcommand{\labelbab}{BAGIAN}
+\renewcommand{\namabab}{Bagian}
+\renewcommand{\thechapter}{\Alph{chapter}}
+\setcounter{chapter}{0}
+
+\input{section/00d-pendahuluan}
+
+\clearpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{section/01-panduan-asisten-praktikum}
+\input{section/02-persiapan-lingkungan}
+\input{section/03-panduan-praktikan}
+
+% Kembali ke penomoran angka untuk sepuluh modul.
+\renewcommand{\labelbab}{MODUL}
+\renewcommand{\namabab}{Modul}
+\renewcommand{\thechapter}{\arabic{chapter}}
+\setcounter{chapter}{0}
+
+% --- sepuluh modul ----------------------------------------------------------
+\input{section/04-modul-01-lingkungan-dan-sumber-data}
+\input{section/05-modul-02-skema-bintang-pertama}
+\input{section/06-modul-03-dimensi-lanjutan-scd2}
+\input{section/07-modul-04-fact-table-multi-fakta}
+\input{section/08-modul-05-desain-fisikal}
+\input{section/09-modul-06-optimisasi-query-analitik}
+\input{section/10-modul-07-etl-multi-sumber}
+\input{section/11-modul-08-dbt-transformasi-dokumentasi-lineage}
+\input{section/12-modul-09-olap-dan-dashboard}
+\input{section/13-modul-10-jaminan-kualitas-data}
+
+% --- pustaka ----------------------------------------------------------------
+\clearpage
+\renewcommand{\bibname}{Pustaka}
+\addcontentsline{toc}{chapter}{Pustaka}
+\small
+\bibliographystyle{apalike}
+\bibliography{references}
+
+% --- sampul belakang --------------------------------------------------------
+\SampulBelakang
+
+\end{document}

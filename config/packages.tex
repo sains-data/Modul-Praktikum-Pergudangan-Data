@@ -1,0 +1,56 @@
+% -----------------------------------------------------------------------------
+% Paket -- dokumen A4 (report), bukan beamer.
+% Kompilasi yang disarankan: latexmk -pdf main.tex
+% -----------------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[indonesian]{babel}
+\usepackage{helvet}
+\usepackage[a4paper,top=2.6cm,bottom=2.4cm,left=2.4cm,right=2.4cm,
+            headheight=15pt,headsep=0.8cm]{geometry}
+
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{ragged2e}
+\usepackage{enumitem}
+\usepackage{amssymb}
+\usepackage{tikz}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{needspace}
+\usepackage{letterspace}
+\usepackage[round,authoryear]{natbib}
+\usepackage[hidelinks]{hyperref}
+
+\usetikzlibrary{arrows.meta,calc,positioning,shapes.geometric,backgrounds,fit}
+
+\renewcommand{\familydefault}{\sfdefault}
+\graphicspath{{../03_branding/}{assets/}}
+
+\setlist{topsep=.3em,itemsep=.25em,parsep=0pt}
+\renewcommand{\arraystretch}{1.25}
+
+% Baris tabel panjang tidak perlu dipenggal di tengah halaman.
+\clubpenalty=10000
+\widowpenalty=10000
+
+% -----------------------------------------------------------------------------
+% Pengecualian pemenggalan: istilah Inggris yang dipenggal keliru oleh pola
+% pemenggalan bahasa Indonesia.
+% -----------------------------------------------------------------------------
+\hyphenation{snap-shot snap-shots pipe-line pipe-lines cove-rage
+  addi-tive semi-addi-tive non-addi-tive fact-less sur-ro-gate
+  con-formed de-ter-mi-nant sche-ma sche-mas sta-ging ware-house
+  data-base data-bases pro-fi-ling gra-nu-la-ri-tas}
+
+% -----------------------------------------------------------------------------
+% Toleransi penjajaran. Nama berkas dan nama objek basis data ditulis dengan
+% \texttt dan tidak dapat dipenggal, sehingga paragraf sesekali memerlukan
+% kelonggaran tambahan agar tidak meluber ke margin.
+% -----------------------------------------------------------------------------
+\emergencystretch=3em
+\hbadness=2500

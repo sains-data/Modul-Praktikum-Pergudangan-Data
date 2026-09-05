@@ -1,0 +1,11 @@
+-- =============================================================================
+-- TODO (dikerjakan mahasiswa)
+--
+-- Lengkapi mengikuti pola stg_penjualan.sql:
+--   1. tetapkan config materialization
+--   2. baca dari source('nusamart', 'toko_gabungan') -- BUKAN nama tabel
+--      langsung, karena model yang tidak memakai source() akan muncul
+--      TERPUTUS pada graf lineage meskipun build-nya berhasil
+--   3. seragamkan nama kolom: toko_id, kode_toko, nama_toko, kota, provinsi,
+--      tipe_toko
+-- =============================================================================

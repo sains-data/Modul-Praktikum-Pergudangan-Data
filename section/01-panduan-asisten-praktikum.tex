@@ -1,0 +1,94 @@
+\chapter{Panduan Asisten Praktikum}
+
+\section{Peran Asisten}
+
+Asisten memfasilitasi proses belajar tanpa mengambil alih pekerjaan mahasiswa.
+Seluruh DDL, query, skrip ETL, analisis, dan laporan tetap dikerjakan sendiri
+oleh mahasiswa. Asisten bertanggung jawab untuk:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item memverifikasi kesiapan lingkungan sebelum sesi dimulai;
+  \item menghubungkan konsep kuliah dengan objek basis data yang dibangun di
+        laboratorium;
+  \item menjalankan checkpoint pada waktu yang ditentukan menggunakan skrip
+        pemeriksa;
+  \item membantu diagnosis berdasarkan pesan galat dan keluaran
+        \perintah{EXPLAIN}, bukan berdasarkan tebakan;
+  \item menjaga agar data mentah pada basis data sumber tidak diubah; dan
+  \item menilai menggunakan rubrik yang sama untuk seluruh kelas.
+\end{enumerate}
+
+\section{Alur Sesi 120 Menit}
+
+Karena waktu tatap muka terbatas, pemasangan perangkat lunak dan pembacaan
+teori dasar harus sudah diselesaikan mahasiswa sebelum sesi. Asisten memakai
+waktu kelas untuk menghubungkan teori dengan objek yang dibangun, memandu
+prosedur inti, dan memastikan setiap mahasiswa mencapai checkpoint minimal.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.62\textwidth}r@{}}
+\toprule
+\textbf{Aktivitas} & \textbf{Durasi} \\
+\midrule
+Briefing dan demonstrasi satu contoh oleh asisten & 15 menit \\
+Kerja terbimbing pada lembar kerja, asisten berkeliling & 80 menit \\
+Checkpoint dengan skrip pemeriksa otomatis & 15 menit \\
+Briefing tugas luar laboratorium & 10 menit \\
+\midrule
+\textbf{Total} & \textbf{120 menit} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Target Waktu dan Checkpoint}
+
+\begin{itemize}
+  \item Menit 0--15: mahasiswa memahami kasus, luaran yang dituju, dan satu
+        contoh yang dikerjakan asisten di depan kelas.
+  \item Menit 15--95: mahasiswa menyelesaikan Bagian A sampai D pada prosedur
+        terbimbing dan menghasilkan artefak yang diminta modul.
+  \item Menit 95--110: asisten menjalankan skrip pemeriksa dan menangani butir
+        yang gagal. Skrip mencetak lulus atau gagal per butir sehingga asisten
+        hanya perlu menangani yang gagal --- inilah yang membuat 15 menit cukup
+        untuk satu kelas.
+  \item Menit 110--120: asisten menjelaskan tugas luar laboratorium, format
+        berkas, dan tenggat pengumpulan.
+\end{itemize}
+
+Jika demonstrasi mengalami kendala teknis, asisten tidak boleh mengorbankan
+waktu kerja terbimbing. Gunakan \berkas{snapshot.sql} modul sebelumnya yang
+telah disiapkan, lalu lanjutkan diagnosis setelah sesi.
+
+\section{Batas Bantuan}
+
+Asisten boleh memberi petunjuk, menunjukkan dokumentasi, membantu membaca pesan
+galat PostgreSQL, dan membantu menafsirkan keluaran \perintah{EXPLAIN}. Asisten
+tidak memberikan salinan DDL atau query jawaban, tidak memperbaiki seluruh
+skrip mahasiswa, dan tidak menentukan kesimpulan analisis.
+
+\begin{catatanasisten}
+Kaidah yang berlaku sepanjang praktikum: \textbf{setiap keputusan teknis harus
+dapat dijelaskan}. Ketika mahasiswa bertanya ``tipe data apa yang benar?'',
+pertanyaan balik yang tepat adalah ``berapa nilai terbesar yang mungkin, dan
+berapa byte yang Anda bersedia bayar untuk itu?''. Jawaban benar tanpa alasan
+memperoleh separuh nilai.
+\end{catatanasisten}
+
+\section{Checklist Sebelum Sesi}
+
+\begin{ceklis}
+  \item \berkas{docker compose up} telah diuji pada Windows, macOS, dan Linux.
+  \item Basis data sumber dan gudang dapat diakses dari jaringan laboratorium.
+  \item Dataset berukuran sesuai kebutuhan modul telah tersedia --- ukuran
+        kecil untuk Modul 1--5, ukuran sedang untuk Modul 6--8.
+  \item Nilai \perintah{--seed} pembangkit data sama untuk seluruh kelas
+        sehingga angka hasil profiling dapat dibandingkan antarkelompok.
+  \item \berkas{snapshot.sql} keadaan akhir modul sebelumnya tersedia bagi
+        mahasiswa yang tertinggal.
+  \item Skrip pemeriksa \berkas{check.sql} atau \berkas{check.py} telah
+        dijalankan pada basis data referensi dan seluruh butirnya lulus.
+  \item Ekstensi PostgreSQL yang diperlukan modul telah diaktifkan --- lihat
+        Tabel~\ref{tab:ekstensi}.
+  \item Rubrik dan format pengumpulan tersedia bagi mahasiswa.
+\end{ceklis}

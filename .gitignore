@@ -1,0 +1,46 @@
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Python and notebooks
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+
+# Generated or local data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+.DS_Store
+
+
+# Berkas keluaran kompilasi
+tmp/
+*.pdf
+!modul-praktikum-pergudangan-data.pdf
+
+# Artefak seed yang besar atau dapat dibangkitkan ulang
+seed/snapshot/
+seed/northwind.sql
+
+# Keluaran dbt
+target/
+dbt_packages/
+logs/

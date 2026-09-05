@@ -1,0 +1,6 @@
+-- =============================================================================
+-- TODO (dikerjakan mahasiswa)
+--
+-- Bangun dimensi toko dari ref('stg_toko'). Jangan lupa baris unknown
+-- berkunci -1, mengikuti pola dim_produk.sql.
+-- =============================================================================

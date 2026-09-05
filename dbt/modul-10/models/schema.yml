@@ -1,0 +1,100 @@
+# =============================================================================
+# Modul 10 -- Generic data test beserta tingkat keparahannya.
+#
+# Modul 8 memperkenalkan keempat uji baku. Yang baru di sini adalah TINGKAT
+# KEPARAHAN dan AMBANG -- dan justru itu yang membuat pengujian dapat dipakai
+# di lingkungan sebenarnya.
+#
+# error : build berhenti. Untuk kerusakan yang membuat angka salah.
+# warn  : build lanjut, dilaporkan. Untuk keadaan yang perlu diketahui.
+#
+# Menjadikan SELURUH uji bertingkat error tampak paling aman, tetapi justru
+# berbahaya: pipeline yang berhenti setiap malam karena dua belas baris
+# bermasalah akan segera dimatikan uji-nya oleh orang yang lelah dibangunkan --
+# dan sesudah itu tidak ada lagi yang memeriksa apa pun.
+# =============================================================================
+version: 2
+
+models:
+  - name: fct_penjualan
+    description: >
+      Fakta penjualan. Seluruh uji di bawah dijalankan pada setiap batch, dan
+      hasilnya masuk laporan kualitas data.
+    columns:
+      - name: transaksi_id
+        tests:
+          # Kunci transaksi yang hilang berarti baris tidak dapat ditelusuri
+          # kembali ke sumbernya.
+          - not_null:
+              config:
+                severity: error
+
+      - name: produk_key
+        tests:
+          - not_null:
+              config:
+                severity: error
+          # Versi dbt dari FOREIGN KEY. Berbeda dari constraint basis data,
+          # uji ini juga berlaku untuk model yang berupa view.
+          - relationships:
+              to: ref('dim_produk')
+              field: produk_key
+              config:
+                severity: error
+
+      - name: audit_key
+        tests:
+          # Tanpa audit_key, pertanyaan "baris ini dimuat kapan, oleh batch
+          # yang mana" tidak dapat dijawab -- dan pemuatan ulang selektif
+          # menjadi mustahil.
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_produk
+    columns:
+      - name: produk_key
+        tests:
+          - unique:
+              config:
+                severity: error
+          - not_null:
+              config:
+                severity: error
+      - name: produk_id
+        description: >
+          SENGAJA tidak unik -- satu produk punya beberapa versi SCD-2. Uji
+          unique dipasang pada produk_key, bukan di sini.
+        tests:
+          - not_null:
+              config:
+                severity: error
+
+  - name: dim_audit
+    columns:
+      - name: status_mutu
+        tests:
+          - accepted_values:
+              values: ['lengkap', 'ada selisih', 'gagal', 'karantina',
+                       'tidak diketahui']
+              config:
+                # warn, bukan error: nilai baru yang belum terdaftar perlu
+                # diketahui, tetapi tidak membatalkan pemuatan.
+                severity: warn
+
+# TODO (dikerjakan mahasiswa):
+#
+#   1. Tambahkan uji untuk proses bisnis kedua -- persediaan, promosi, atau
+#      retur -- sesuai pilihan Anda pada tugas scorecard.
+#
+#   2. Tetapkan ambang toleransi dengan konfigurasi error_if dan warn_if,
+#      misalnya:
+#
+#        - not_null:
+#            config:
+#              severity: warn
+#              warn_if: ">10"
+#              error_if: ">1000"
+#
+#      Ambang yang Anda pilih harus dapat dijelaskan dalam istilah DAMPAK
+#      BISNIS: mengapa 10 baris ditoleransi sedangkan 1.000 tidak.

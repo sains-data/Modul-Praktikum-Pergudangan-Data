@@ -1,0 +1,32 @@
+-- =============================================================================
+-- TODO (dikerjakan mahasiswa) -- model inti modul ini.
+--
+-- Model ini harus memakai ref() ke SELURUH model dimensi, dan menerapkan dua
+-- aturan yang sudah Anda pegang sejak Modul 3 dan Modul 5:
+--
+--   1. LEFT JOIN, bukan JOIN. Baris tanpa pasangan dimensi harus tetap masuk;
+--      INNER JOIN membuangnya diam-diam dan total penjualan menyusut tanpa
+--      jejak.
+--
+--   2. COALESCE(..., -1). Kunci yang kosong diarahkan ke baris unknown, bukan
+--      dibiarkan NULL.
+--
+--   3. Pencarian versi dimensi memakai RENTANG TANGGAL TRANSAKSI, bukan
+--      baris_kini. Transaksi yang datang terlambat harus menunjuk versi yang
+--      berlaku saat ia terjadi, bukan versi hari ini.
+--
+-- Kerangka:
+--
+--   {{ config(materialized='table') }}
+--
+--   SELECT f.transaksi_id,
+--          ...
+--          COALESCE(p.produk_key, -1) AS produk_key,
+--          ...
+--   FROM      {{ ref('stg_penjualan') }} f
+--   LEFT JOIN {{ ref('dim_produk') }} p
+--          ON  p.produk_id = f.produk_id
+--          AND f.tanggal_transaksi >= p.mulai_berlaku
+--          AND f.tanggal_transaksi <  p.selesai_berlaku
+--   LEFT JOIN ...
+-- =============================================================================

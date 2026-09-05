@@ -1,0 +1,754 @@
+\chapter{Skema Bintang Pertama}
+\label{modul:skema-bintang-pertama}
+
+\section{Identitas Modul}
+
+\begin{identitasmodul}
+\textbf{Sumber materi}    & Pertemuan 3 \\
+\textbf{CPMK}             & CPMK-072 \\
+\textbf{Minggu pelaksanaan} & Minggu ke-4 \\
+\textbf{Durasi tatap muka} & 120 menit \\
+\textbf{Estimasi tugas}   & 3--4 jam di luar sesi \\
+\textbf{Moda kerja}       & Individual \\
+\textbf{Perangkat}        & PostgreSQL 17 dan DBeaver \\
+\textbf{Dataset}          & NusaMart ukuran kecil \\
+\textbf{Skrip pendukung}  & \berkas{sql/modul-02/} beserta \berkas{check.sql} \\
+\textbf{Luaran}           & \berkas{ddl.sql}, \berkas{load.sql}, dan \berkas{query.sql} \\
+\end{identitasmodul}
+
+\slideref{3}
+
+\section{Capaian dan Indikator Keberhasilan}
+
+Mahasiswa mampu menerjemahkan satu proses bisnis menjadi skema bintang,
+membangun dimensi tanggal, memuat dimensi dan fakta, serta merekonsiliasi hasil
+star query dengan sumber. Keberhasilan ditandai oleh hasil agregat yang sama
+persis dengan basis data sumber.
+
+\begin{capaian}
+Pada akhir modul ini mahasiswa mampu:
+\begin{enumerate}[leftmargin=1.4em]
+  \item membangkitkan \perintah{dim\_tanggal} beserta atribut kalender yang
+        diperlukan analisis, bukan sekadar kolom tanggal;
+  \item membedakan \istilah{natural key} dari \istilah{surrogate key} dan
+        menjelaskan mengapa tabel fakta menunjuk surrogate key;
+  \item menulis DDL dimensi dan fakta yang grain-nya sesuai dengan pernyataan
+        grain Modul 1;
+  \item memuat dimensi dan fakta dari sumber dengan pemetaan kunci yang benar;
+  \item menulis star query dan membuktikan angkanya sama persis dengan query
+        ekuivalen pada basis data sumber.
+\end{enumerate}
+\end{capaian}
+
+Rekonsiliasi adalah inti modul ini. Skema bintang yang indah tetapi
+menghasilkan angka berbeda dari sumber tidak bernilai apa pun --- dan selisih
+itu hampir selalu berasal dari satu keputusan yang tidak dicatat, bukan dari
+kesalahan SQL.
+
+\section{Prasyarat dan Persiapan}
+
+\subsection{Prasyarat}
+
+\begin{itemize}
+  \item Pernyataan grain, kandidat measure, dan kandidat dimensi hasil Modul 1;
+  \item DDL PostgreSQL: \perintah{CREATE TABLE}, tipe data dasar, primary key,
+        dan foreign key;
+  \item agregasi SQL dengan \perintah{GROUP BY} beserta \perintah{JOIN} banyak
+        tabel;
+  \item pemahaman bahwa satu baris pada \perintah{transaksi\_item} adalah satu
+        produk pada satu struk --- temuan Bagian C Modul 1.
+\end{itemize}
+
+\subsection{Pre-lab}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Pastikan \berkas{desain-konseptual-v1.md} sudah diperiksa asisten. Grain
+        yang salah pada modul ini akan terbawa sampai Modul 10.
+  \item Bila Modul 1 belum selesai, pulihkan \berkas{snapshot-modul-01.sql}
+        agar basis data sumber berada pada keadaan yang sama dengan kelas.
+  \item Pastikan basis data \perintah{nusamart\_dw} dapat diakses dan masih
+        kosong.
+  \item Siapkan jawaban atas pertanyaan berikut di dalam
+        \berkas{modul-02-star-schema/pre-lab.md}:
+  \begin{enumerate}[label=\alph*.,leftmargin=1.4em]
+    \item Mengapa tabel fakta tidak menyimpan nama produk secara langsung?
+    \item Berapa baris yang Anda harapkan ada pada \perintah{fakta\_penjualan},
+          dan dari query mana angka itu berasal?
+    \item Transaksi berstatus batal akan Anda muat atau saring? Tuliskan
+          keputusannya sekarang, sebelum menulis DDL.
+  \end{enumerate}
+\end{enumerate}
+
+\section{Konsep Dasar}
+
+\subsection{Anatomi Skema Bintang}
+
+Skema bintang menempatkan satu tabel fakta di pusat, dikelilingi tabel dimensi
+yang menunjuk langsung ke sana tanpa tabel perantara \citep{kimball2013}. Bentuk
+ini lahir dari satu pertimbangan praktis: setiap join tambahan adalah biaya, dan
+query analitik menjalankan join yang sama berulang kali.
+
+\begin{konsep}{Pembagian tugas fakta dan dimensi}
+\begin{itemize}
+  \item \textbf{Tabel fakta} menyimpan \emph{apa yang terjadi} --- besaran
+        numerik yang diukur, ditambah kunci asing ke setiap dimensi. Barisnya
+        banyak, kolomnya sedikit, dan hampir seluruh kolomnya berupa angka.
+  \item \textbf{Tabel dimensi} menyimpan \emph{konteks} --- atribut yang dipakai
+        untuk menyaring, mengelompokkan, dan memberi label. Barisnya sedikit,
+        kolomnya banyak, dan sebagian besar kolomnya berupa teks.
+\end{itemize}
+Aturan praktis: kolom yang muncul setelah \perintah{SELECT} dan
+\perintah{GROUP BY} berasal dari dimensi; kolom di dalam \perintah{SUM} berasal
+dari fakta.
+\end{konsep}
+
+Dimensi sengaja \emph{tidak} dinormalisasi. Pada sumber, kategori produk
+tersimpan pada tabel \perintah{kategori} yang mengacu pada dirinya sendiri, dan
+mengambil nama kategori memerlukan join berjenjang. Pada gudang data, hierarki
+itu diratakan menjadi kolom \perintah{kategori} dan \perintah{sub\_kategori} di
+dalam \perintah{dim\_produk}. Redundansi yang timbul memang disengaja: ia
+ditukar dengan hilangnya join, dan pada tabel berisi 180 ribu baris biayanya
+tidak berarti.
+
+\begin{catatan}
+Bentuk yang mempertahankan normalisasi dimensi disebut \istilah{snowflake}.
+Ia menghemat ruang tetapi menambah join, dan pada gudang data ruang jauh lebih
+murah daripada waktu. Modul ini memakai skema bintang; bila Anda tergoda
+memecah dimensi menjadi beberapa tabel, tuliskan dulu berapa join tambahan yang
+harus dibayar setiap query.
+\end{catatan}
+
+\subsection{Natural Key dan Surrogate Key}
+
+\istilah{Natural key} adalah kunci yang dipakai sistem operasional ---
+\perintah{produk\_id} pada tabel \perintah{produk}. \istilah{Surrogate key}
+adalah kunci buatan gudang data, berupa bilangan bulat tanpa makna bisnis,
+misalnya \perintah{produk\_key}.
+
+Tabel fakta menunjuk surrogate key, bukan natural key. Ada tiga alasan, dan
+alasan ketiga adalah yang paling menentukan:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Ukuran.} Bilangan bulat lebih sempit daripada kode teks, dan
+        tabel fakta memuat jutaan baris.
+  \item \textbf{Kekebalan terhadap sumber.} Bila NusaMart mengganti sistem
+        kasir dan seluruh kode produk berubah, gudang data tidak perlu ditulis
+        ulang.
+  \item \textbf{Kemampuan menyimpan histori.} Satu produk dapat memiliki
+        beberapa versi ketika harganya berubah. Ketiga versi memiliki
+        \perintah{produk\_id} yang sama tetapi \perintah{produk\_key} yang
+        berbeda --- dan hanya karena itulah tabel fakta dapat menunjuk versi
+        yang berlaku saat transaksi terjadi.
+\end{enumerate}
+
+\begin{catatan}
+Alasan ketiga baru akan terasa manfaatnya pada Modul 3, ketika
+\perintah{dim\_produk} diubah menjadi SCD Type 2. Pilihan yang Anda ambil hari
+ini menyiapkan jalan untuk itu. Karena itu, jangan pernah memakai
+\perintah{produk\_id} sebagai primary key \perintah{dim\_produk}, meskipun hari
+ini tampak lebih sederhana.
+\end{catatan}
+
+Natural key tetap disimpan di dalam dimensi sebagai kolom biasa. Ia diperlukan
+saat pemuatan --- untuk mencari surrogate key yang sesuai --- dan saat
+menelusuri satu angka kembali ke sumbernya.
+
+\subsection{Dimensi Tanggal}
+
+Dimensi tanggal adalah satu-satunya dimensi yang dibangkitkan, bukan diambil
+dari sumber. Alasannya sederhana: tidak ada sistem operasional yang menyimpan
+tabel kalender, padahal hampir setiap pertanyaan analitik memakai waktu.
+
+Menyimpan tanggal sebagai kolom \perintah{DATE} di tabel fakta tampak cukup,
+tetapi tidak. Pertanyaan seperti ``bagaimana penjualan akhir pekan dibandingkan
+hari kerja?'' memerlukan atribut yang harus dihitung ulang pada setiap query
+bila kalendernya tidak ada.
+
+\begin{konsep}{Atribut kalender minimum}
+\begin{itemize}
+  \item Kunci: \perintah{tanggal\_key} dalam bentuk \perintah{YYYYMMDD}, dan
+        \perintah{tanggal} sebagai nilai \perintah{DATE} sebenarnya.
+  \item Penanggalan: \perintah{hari}, \perintah{nama\_hari}, \perintah{bulan},
+        \perintah{nama\_bulan}, \perintah{kuartal}, \perintah{tahun}.
+  \item Pengelompokan: \perintah{tahun\_bulan} untuk pengurutan,
+        \perintah{minggu\_ke}, dan \perintah{hari\_ke\_tahun}.
+  \item Penanda: \perintah{akhir\_pekan} bertipe \perintah{BOOLEAN}.
+\end{itemize}
+\end{konsep}
+
+Kunci \perintah{YYYYMMDD} adalah pengecualian yang diterima atas aturan
+``surrogate key tanpa makna''. Bentuk ini memudahkan pembacaan saat
+\istilah{debugging} dan memungkinkan partisi berdasarkan rentang kunci pada
+Modul 6, tanpa kehilangan sifatnya sebagai bilangan bulat sempit.
+
+\subsection{Measure dan Additivity}
+
+\istilah{Measure} adalah kolom numerik pada tabel fakta. Sifat penting yang
+harus diketahui sebelum menyimpannya adalah \istilah{additivity} --- terhadap
+dimensi apa saja measure itu boleh dijumlahkan.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+\toprule
+\textbf{Sifat} & \textbf{Arti} & \textbf{Contoh pada NusaMart} \\
+\midrule
+Additive & Boleh dijumlahkan terhadap seluruh dimensi &
+  \perintah{kuantitas}, \perintah{subtotal}, \perintah{diskon} \\
+Semi-additive & Boleh dijumlahkan terhadap sebagian dimensi, tetapi tidak
+  terhadap waktu & Saldo persediaan --- dibahas pada Modul 4 \\
+Non-additive & Tidak boleh dijumlahkan sama sekali &
+  \perintah{harga\_satuan}, rasio, dan persentase \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Measure non-additive tetap disimpan. Yang keliru bukan menyimpannya, melainkan
+menjumlahkannya. Harga satuan diperlukan untuk menghitung harga rata-rata
+tertimbang, dan rata-rata tertimbang dihitung dari dua measure additive:
+$\sum(\text{subtotal}) / \sum(\text{kuantitas})$.
+
+\begin{peringatan}
+Rasio tidak pernah disimpan sebagai measure. Rata-rata dari rata-rata bukanlah
+rata-rata: menjumlahkan sepuluh nilai ``margin persen'' lalu membaginya dengan
+sepuluh menghasilkan angka yang salah kecuali seluruh transaksinya berukuran
+sama. Simpan pembilang dan penyebutnya sebagai measure additive, lalu hitung
+rasionya saat query.
+\end{peringatan}
+
+\section{Studi Kasus dan Protokol Praktikum}
+
+Proses penjualan NusaMart digunakan untuk membangun skema bintang pertama.
+Seluruh query analitik wajib dibandingkan dengan query ekuivalen pada sumber.
+
+Skema yang dibangun mengikuti pernyataan grain Modul 1:
+
+\begin{quote}
+\emph{Satu baris fakta mewakili satu produk pada satu baris struk penjualan di
+satu toko pada satu waktu.}
+\end{quote}
+
+Grain ini berpadanan satu lawan satu dengan baris pada
+\perintah{nusamart.transaksi\_item}. Karena itu jumlah baris
+\perintah{fakta\_penjualan} harus sama dengan jumlah baris
+\perintah{transaksi\_item} yang lolos penyaringan status --- dan angka itu
+adalah pemeriksaan rekonsiliasi pertama Anda.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.26\textwidth}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Tabel gudang} & \textbf{Sumber} & \textbf{Catatan} \\
+\midrule
+\perintah{dim\_tanggal} & dibangkitkan &
+  Sepuluh tahun, 2020 sampai 2029 \\
+\perintah{dim\_produk} & \perintah{produk} dan \perintah{kategori} &
+  Hierarki kategori diratakan \\
+\perintah{dim\_toko} & \perintah{toko} &
+  Diambil apa adanya \\
+\perintah{fakta\_penjualan} & \perintah{transaksi\_item} dan
+  \perintah{transaksi} & Grain mengikuti \perintah{transaksi\_item} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Dimensi pelanggan sengaja \emph{belum} dibangun. Dari Modul 1 diketahui bahwa
+sebagian besar transaksi tidak memiliki \perintah{pelanggan\_id}, dan penanganan
+yang benar memerlukan baris \perintah{unknown} yang baru dibahas pada Modul 5.
+Menundanya bukan penyederhanaan yang malas, melainkan urutan yang disengaja.
+
+\begin{catatanasisten}
+Seluruh objek modul ini dibangun pada schema \perintah{public} basis data
+\perintah{nusamart\_dw}. Penataan ke schema \perintah{staging},
+\perintah{gudang}, dan \perintah{mart} adalah pekerjaan Modul 5; bila
+dikerjakan sekarang, Modul 5 kehilangan bahan latihannya.
+\end{catatanasisten}
+
+\section{Alur Praktikum 120 Menit}
+
+\begin{alurwaktu}
+0--15 & Demonstrasi grain dan bentuk skema bintang. \\
+15--95 & Kerja terbimbing: DDL, pemuatan, dan star query. \\
+95--110 & Checkpoint struktur tabel dan rekonsiliasi hasil. \\
+110--120 & Penjelasan tugas proses bisnis kedua. \\
+\end{alurwaktu}
+
+\section{Prosedur Praktikum Terbimbing}
+
+Seluruh perintah pada bagian ini dijalankan pada \perintah{nusamart\_dw}, kecuali
+disebutkan lain. Kumpulkan DDL pada \berkas{ddl.sql}, perintah pemuatan pada
+\berkas{load.sql}, dan query analitik pada \berkas{query.sql} --- ketiganya harus
+dapat dijalankan berurutan dari awal.
+
+\subsection{Bagian A: Membentuk Dimensi Tanggal}
+
+\langkah{A.1 Membangkitkan kalender sepuluh tahun}{10 menit}
+
+Kalender sepuluh tahun dibangkitkan dengan \perintah{generate\_series} oleh
+skrip \berkas{sql/\allowbreak modul-02/\allowbreak 00-dim-tanggal.sql}.
+Jalankan skrip itu, lalu baca isinya --- Anda perlu memahami cara kerjanya,
+bukan sekadar menjalankannya.
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE dim_tanggal (
+  tanggal_key    INTEGER     PRIMARY KEY,
+  tanggal        DATE        NOT NULL UNIQUE,
+  hari           SMALLINT    NOT NULL,
+  nama_hari      VARCHAR(10) NOT NULL,
+  minggu_ke      SMALLINT    NOT NULL,
+  bulan          SMALLINT    NOT NULL,
+  nama_bulan     VARCHAR(12) NOT NULL,
+  kuartal        SMALLINT    NOT NULL,
+  tahun          SMALLINT    NOT NULL,
+  tahun_bulan    INTEGER     NOT NULL,
+  hari_ke_tahun  SMALLINT    NOT NULL,
+  akhir_pekan    BOOLEAN     NOT NULL
+);
+
+INSERT INTO dim_tanggal
+SELECT TO_CHAR(d, 'YYYYMMDD')::INTEGER,
+       d::DATE,
+       EXTRACT(DAY     FROM d),
+       TO_CHAR(d, 'TMDay'),
+       EXTRACT(WEEK    FROM d),
+       EXTRACT(MONTH   FROM d),
+       TO_CHAR(d, 'TMMonth'),
+       EXTRACT(QUARTER FROM d),
+       EXTRACT(YEAR    FROM d),
+       TO_CHAR(d, 'YYYYMM')::INTEGER,
+       EXTRACT(DOY     FROM d),
+       EXTRACT(ISODOW  FROM d) IN (6, 7)
+FROM   generate_series(DATE '2020-01-01', DATE '2029-12-31', INTERVAL '1 day') d;
+\end{lstlisting}
+
+\langkah{A.2 Memverifikasi kalender}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT COUNT(*)          AS jumlah_hari,
+       MIN(tanggal)      AS mulai,
+       MAX(tanggal)      AS selesai,
+       COUNT(*) FILTER (WHERE akhir_pekan) AS jumlah_akhir_pekan
+FROM   dim_tanggal;
+\end{lstlisting}
+
+Sepuluh tahun 2020--2029 memuat 3.653 hari karena 2020, 2024, dan 2028 adalah
+tahun kabisat. Bila angka Anda 3.650, rentangnya keliru.
+
+\begin{peringatan}
+Penanda \perintah{TM} pada \perintah{TO\_CHAR} menghasilkan nama hari dan bulan
+mengikuti \perintah{lc\_time} basis data. Bila keluarannya berbahasa Inggris
+padahal Anda mengharapkan bahasa Indonesia, itu bukan kesalahan skrip melainkan
+setelan lokal. Yang penting adalah konsistensi: pilih satu, lalu jangan
+mencampurnya di tengah semester.
+\end{peringatan}
+
+\subsection{Bagian B: Menyalin Sumber dan Membuat Tabel Dimensi}
+
+\langkah{B.1 Menyalin sumber ke tabel staging}{10 menit}
+
+Sumber dan gudang berada pada dua basis data terpisah, sehingga isinya harus
+dipindahkan lebih dahulu. Skrip \berkas{sql/modul-02/01-staging.sql} membuat
+empat tabel penampung pada \perintah{nusamart\_dw}:
+\perintah{staging\_produk}, \perintah{staging\_kategori},
+\perintah{staging\_toko}, dan \perintah{staging\_penjualan}.
+
+Tabel staging menyalin sumber \textbf{apa adanya} --- tanpa surrogate key,
+tanpa perbaikan, dan tanpa penyaringan. Pembersihan dan pemetaan kunci terjadi
+pada langkah berikutnya, dan pemisahan ini yang membuat pemuatan dapat diulang
+tanpa menyentuh sumber kembali.
+
+\begin{lstlisting}[style=shellgaya]
+# Ekspor dari sumber, lalu impor ke gudang. Ulangi untuk keempat tabel.
+docker compose exec -T postgres_source \
+  psql -U praktikum -d nusamart_oltp \
+  -c "COPY (SELECT * FROM nusamart.toko) TO STDOUT WITH CSV" \
+| docker compose exec -T postgres_dw \
+  psql -U praktikum -d nusamart_dw \
+  -c "COPY staging_toko FROM STDIN WITH CSV"
+\end{lstlisting}
+
+\begin{catatan}
+Perintah \perintah{COPY ... TO STDOUT} yang disalurkan langsung ke
+\perintah{COPY ... FROM STDIN} memindahkan data tanpa singgah sebagai berkas.
+Opsi \perintah{-T} diperlukan agar Docker tidak mengalokasikan terminal, yang
+akan merusak aliran data biner.
+\end{catatan}
+
+\langkah{B.2 Menulis DDL dimensi}{10 menit}
+
+Perhatikan pemisahan surrogate key dan natural key pada kedua tabel berikut.
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE dim_produk (
+  produk_key    INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  produk_id     INTEGER      NOT NULL UNIQUE,   -- natural key dari sumber
+  sku           VARCHAR(20)  NOT NULL,
+  nama_produk   VARCHAR(150) NOT NULL,
+  merek         VARCHAR(60),
+  kategori      VARCHAR(60),                    -- hierarki yang diratakan
+  sub_kategori  VARCHAR(60),
+  satuan        VARCHAR(15),
+  berat_gram    NUMERIC(10,2)
+);
+
+CREATE TABLE dim_toko (
+  toko_key      INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  toko_id       INTEGER     NOT NULL UNIQUE,
+  kode_toko     VARCHAR(15) NOT NULL,
+  nama_toko     VARCHAR(100) NOT NULL,
+  kota          VARCHAR(60),
+  provinsi      VARCHAR(60),
+  tipe_toko     VARCHAR(30),
+  tanggal_buka  DATE
+);
+\end{lstlisting}
+
+\langkah{B.3 Memuat dimensi dari staging}{10 menit}
+
+Dimensi diisi dari staging, bukan dari sumber secara langsung. Di sinilah
+hierarki kategori diratakan menjadi dua kolom.
+
+\begin{lstlisting}[style=sqlgaya]
+INSERT INTO dim_produk (produk_id, sku, nama_produk, merek,
+                        kategori, sub_kategori, satuan, berat_gram)
+SELECT     p.produk_id, p.sku, p.nama_produk, p.merek,
+           induk.nama_kategori AS kategori,
+           k.nama_kategori     AS sub_kategori,
+           p.satuan, p.berat_gram
+FROM       staging_produk p
+LEFT JOIN  staging_kategori k     ON k.kategori_id     = p.kategori_id
+LEFT JOIN  staging_kategori induk ON induk.kategori_id = k.induk_kategori_id;
+\end{lstlisting}
+
+Perhatikan join ganda ke \perintah{staging\_kategori}: inilah bentuk konkret
+dari perataan hierarki. Satu join mengambil sub-kategori, satu lagi mengambil
+induknya. Pada sumber, keduanya berada di satu tabel yang mengacu pada dirinya
+sendiri; pada dimensi, keduanya menjadi dua kolom yang siap dipakai
+\perintah{GROUP BY}.
+
+\begin{peringatan}
+Dari Modul 1 diketahui ada produk yang menunjuk kategori tidak dikenal.
+\perintah{LEFT JOIN} membuat baris itu tetap masuk dengan kategori
+\perintah{NULL}, sedangkan \perintah{INNER JOIN} akan membuangnya diam-diam ---
+dan rekonsiliasi Anda akan meleset tanpa jejak. Gunakan \perintah{LEFT JOIN},
+lalu hitung berapa baris yang berkategori \perintah{NULL} dan catat angkanya.
+\end{peringatan}
+
+\subsection{Bagian C: Membuat dan Memuat Fakta Penjualan}
+
+\langkah{C.1 Menulis DDL fakta}{10 menit}
+
+Tulis pernyataan grain sebagai komentar di baris pertama DDL. Ini bukan
+formalitas: DDL yang tidak menyebutkan grainnya akan disalahpahami oleh orang
+berikutnya, termasuk oleh Anda sendiri tiga modul kemudian.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Grain: satu baris mewakili satu produk pada satu baris struk penjualan
+--        di satu toko pada satu waktu.
+CREATE TABLE fakta_penjualan (
+  tanggal_key    INTEGER      NOT NULL REFERENCES dim_tanggal(tanggal_key),
+  produk_key     INTEGER      NOT NULL REFERENCES dim_produk(produk_key),
+  toko_key       INTEGER      NOT NULL REFERENCES dim_toko(toko_key),
+  nomor_struk    VARCHAR(25)  NOT NULL,   -- degenerate dimension
+  transaksi_id   BIGINT       NOT NULL,   -- penelusuran balik ke sumber
+  kuantitas      NUMERIC(10,2) NOT NULL,
+  harga_satuan   NUMERIC(12,2) NOT NULL,  -- non-additive
+  diskon         NUMERIC(12,2) NOT NULL DEFAULT 0,
+  subtotal       NUMERIC(14,2) NOT NULL
+);
+\end{lstlisting}
+
+Kolom \perintah{nomor\_struk} adalah \istilah{degenerate dimension}: atribut
+dimensi yang tidak memiliki tabel dimensi sendiri karena tidak punya atribut
+lain untuk disimpan. Ia tetap berguna --- tanpanya, pertanyaan ``berapa
+rata-rata jumlah produk per struk?'' tidak dapat dijawab.
+
+\begin{catatan}
+Dari Modul 1 diketahui \perintah{nomor\_struk} hanya unik pada pasangan
+\perintah{(toko\_id, nomor\_struk)}. Karena \perintah{toko\_key} sudah ada pada
+tabel fakta, pasangan \perintah{(toko\_key, nomor\_struk)} tetap
+mengidentifikasi satu struk secara unik. Inilah contoh temuan Modul 1 yang
+langsung memengaruhi rancangan Modul 2.
+\end{catatan}
+
+\langkah{C.2 Memuat fakta dengan pemetaan kunci}{15 menit}
+
+Pemuatan fakta bukan penyalinan. Setiap natural key dari sumber harus
+diterjemahkan menjadi surrogate key melalui join ke dimensi.
+
+\begin{lstlisting}[style=sqlgaya]
+INSERT INTO fakta_penjualan (
+  tanggal_key, produk_key, toko_key, nomor_struk, transaksi_id,
+  kuantitas, harga_satuan, diskon, subtotal)
+SELECT dt.tanggal_key,
+       dp.produk_key,
+       dtk.toko_key,
+       s.nomor_struk,
+       s.transaksi_id,
+       s.kuantitas,
+       s.harga_satuan,
+       s.diskon,
+       s.subtotal
+FROM   staging_penjualan s
+JOIN   dim_tanggal dt  ON dt.tanggal = s.waktu_transaksi::DATE
+JOIN   dim_produk  dp  ON dp.produk_id = s.produk_id
+JOIN   dim_toko    dtk ON dtk.toko_id  = s.toko_id
+WHERE  s.status <> 'BATAL';
+\end{lstlisting}
+
+\begin{peringatan}
+\perintah{JOIN} biasa pada perintah di atas akan \emph{membuang} baris yang
+tidak menemukan pasangan dimensi, tanpa pesan galat apa pun. Karena itu
+langkah berikutnya wajib: hitung selisih antara jumlah baris sumber dan jumlah
+baris yang berhasil dimuat. Bila selisihnya bukan nol, cari tahu sebabnya
+sebelum melanjutkan. Penanganan yang benar --- mengarahkan baris tanpa pasangan
+ke baris \perintah{unknown} --- dibahas pada Modul 5.
+\end{peringatan}
+
+\langkah{C.3 Memeriksa jumlah baris}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT (SELECT COUNT(*) FROM staging_penjualan WHERE status <> 'BATAL')
+         AS baris_sumber,
+       (SELECT COUNT(*) FROM fakta_penjualan) AS baris_fakta,
+       (SELECT COUNT(*) FROM staging_penjualan WHERE status <> 'BATAL')
+       - (SELECT COUNT(*) FROM fakta_penjualan) AS selisih;
+\end{lstlisting}
+
+Catat angka \perintah{selisih} pada laporan meskipun nilainya nol. Selisih yang
+tidak dijelaskan adalah kegagalan; selisih yang dijelaskan adalah temuan.
+
+\subsection{Bagian D: Menulis dan Merekonsiliasi Star Query}
+
+\langkah{D.1 Menulis tiga star query}{15 menit}
+
+Tulis tiga query yang menjawab pertanyaan bisnis berikut. Ketiganya harus
+memakai bentuk baku skema bintang: fakta di-join ke dimensi, dikelompokkan
+menurut atribut dimensi, dan diagregasi atas measure fakta.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Total nilai penjualan per kategori produk per bulan sepanjang 2024.
+  \item Sepuluh produk dengan nilai penjualan tertinggi di Provinsi Lampung.
+  \item Perbandingan nilai penjualan hari kerja dan akhir pekan per tipe toko.
+\end{enumerate}
+
+\begin{lstlisting}[style=sqlgaya]
+-- Contoh bentuk baku untuk pertanyaan pertama.
+SELECT dp.kategori,
+       dt.tahun_bulan,
+       SUM(f.subtotal)  AS nilai_penjualan,
+       SUM(f.kuantitas) AS unit_terjual
+FROM   fakta_penjualan f
+JOIN   dim_produk  dp ON dp.produk_key  = f.produk_key
+JOIN   dim_tanggal dt ON dt.tanggal_key = f.tanggal_key
+WHERE  dt.tahun = 2024
+GROUP  BY dp.kategori, dt.tahun_bulan
+ORDER  BY dp.kategori, dt.tahun_bulan;
+\end{lstlisting}
+
+Perhatikan bahwa query ini tidak memuat satu pun subquery dan hanya
+memerlukan dua join. Query setara pada basis data sumber memerlukan empat join
+dan satu join berjenjang untuk mencapai nama kategori. Selisih itulah yang
+dibeli oleh denormalisasi.
+
+\langkah{D.2 Merekonsiliasi dengan sumber}{15 menit}
+
+Untuk setiap star query, tulis query ekuivalen pada \perintah{nusamart\_oltp},
+lalu bandingkan hasilnya baris demi baris. Angkanya harus sama persis, bukan
+sekadar mirip.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Query pembanding, dijalankan pada nusamart_oltp.
+SELECT induk.nama_kategori AS kategori,
+       TO_CHAR(t.waktu_transaksi, 'YYYYMM')::INTEGER AS tahun_bulan,
+       SUM(ti.subtotal)  AS nilai_penjualan,
+       SUM(ti.kuantitas) AS unit_terjual
+FROM       nusamart.transaksi_item ti
+JOIN       nusamart.transaksi t     ON t.transaksi_id = ti.transaksi_id
+JOIN       nusamart.produk p        ON p.produk_id    = ti.produk_id
+LEFT JOIN  nusamart.kategori k      ON k.kategori_id  = p.kategori_id
+LEFT JOIN  nusamart.kategori induk  ON induk.kategori_id = k.induk_kategori_id
+WHERE      t.status <> 'BATAL'
+  AND      EXTRACT(YEAR FROM t.waktu_transaksi) = 2024
+GROUP  BY induk.nama_kategori, TO_CHAR(t.waktu_transaksi, 'YYYYMM')
+ORDER  BY 1, 2;
+\end{lstlisting}
+
+\begin{catatan}
+Rekonsiliasi yang meleset hampir selalu berasal dari tiga sebab, berurutan
+menurut seringnya: penyaringan status yang berbeda antara kedua sisi,
+\perintah{INNER JOIN} yang membuang baris pada salah satu sisi, dan pembulatan
+\perintah{NUMERIC} yang berbeda. Periksa ketiganya dengan urutan itu sebelum
+mencurigai hal lain.
+\end{catatan}
+
+\begin{luaran}
+\berkas{modul-02-star-schema/ddl.sql}, \berkas{load.sql}, \berkas{query.sql},
+dan \berkas{rekonsiliasi.md} yang memuat tabel perbandingan angka gudang lawan
+angka sumber untuk ketiga query.
+\end{luaran}
+
+\begin{checkpoint}
+Asisten menjalankan \berkas{sql/modul-02/check.sql} pada \perintah{nusamart\_dw}
+dan memeriksa butir berikut:
+\begin{ceklis}
+  \item keempat tabel ada, dan \perintah{fakta\_penjualan} memiliki foreign key
+        ke ketiga dimensi;
+  \item \perintah{dim\_tanggal} memuat 3.653 baris beserta atribut kalender,
+        bukan hanya kolom tanggal;
+  \item \perintah{dim\_produk} dan \perintah{dim\_toko} memakai surrogate key
+        yang terpisah dari natural key;
+  \item tidak ada foreign key fakta yang \perintah{NULL};
+  \item jumlah baris \perintah{fakta\_penjualan} sesuai dengan jumlah baris
+        sumber setelah penyaringan status;
+  \item angka ketiga star query sama persis dengan angka dari sumber;
+  \item pernyataan grain tertulis sebagai komentar pada \berkas{ddl.sql}.
+\end{ceklis}
+\end{checkpoint}
+
+\section{Latihan Mandiri di Kelas}
+
+\latihan{Menambah satu atribut dimensi}
+
+Tambahkan kolom \perintah{kelompok\_harga} pada \perintah{dim\_produk} yang
+mengelompokkan produk menjadi \emph{ekonomis}, \emph{menengah}, dan
+\emph{premium} berdasarkan harga jualnya. Lalu jawab:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Tulis satu pertanyaan bisnis yang hanya dapat dijawab setelah kolom ini
+        ada.
+  \item Mengapa pengelompokan ini disimpan sebagai atribut dimensi, bukan
+        dihitung ulang pada setiap query dengan \perintah{CASE WHEN}?
+  \item Apa yang terjadi pada laporan tahun lalu bila harga sebuah produk naik
+        sehingga kelompoknya berubah? Sebutkan modul mana yang menangani
+        persoalan ini.
+\end{enumerate}
+
+\latihan{Menguji batas grain}
+
+Jalankan query berikut, lalu jelaskan hasilnya.
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT COUNT(*) AS baris_fakta,
+       COUNT(DISTINCT (toko_key, nomor_struk)) AS jumlah_struk,
+       ROUND(COUNT(*)::NUMERIC
+             / COUNT(DISTINCT (toko_key, nomor_struk)), 2) AS produk_per_struk
+FROM   fakta_penjualan;
+\end{lstlisting}
+
+Bila grain Anda ditetapkan pada tingkat struk dan bukan baris struk, kolom mana
+pada query di atas yang menjadi mustahil dihitung? Kaitkan jawabannya dengan
+kaidah ``grain halus dapat diringkas, grain kasar tidak dapat dipulihkan'' dari
+Modul 1.
+
+\section{Tugas Individu}
+
+\subsection{Pekerjaan Wajib}
+Transformasikan proses bisnis kedua dari model E/R sumber menjadi skema bintang
+dan jelaskan setiap keputusan denormalisasi.
+
+Pilih satu proses selain penjualan --- persediaan harian, cakupan promosi, atau
+retur barang. Kumpulkan \berkas{skema-bintang-2.md} yang memuat:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item pernyataan grain dalam satu kalimat bisnis;
+  \item DDL lengkap fakta dan dimensi barunya, tanpa perlu dijalankan;
+  \item daftar dimensi yang \emph{dipakai bersama} dengan skema penjualan ---
+        inilah calon \istilah{conformed dimension} yang Anda tandai pada bus
+        matrix Modul 1;
+  \item untuk setiap denormalisasi yang Anda ambil, satu kalimat yang menyebut
+        apa yang dihemat dan apa yang dibayar.
+\end{enumerate}
+
+\subsection{Pertanyaan Analisis}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Anda memuat \perintah{fakta\_penjualan} dengan \perintah{INNER JOIN} ke
+        \perintah{dim\_produk}. Sebulan kemudian, sumber menambahkan produk baru
+        yang belum masuk dimensi. Apa yang terjadi pada pemuatan berikutnya, dan
+        mengapa kesalahan semacam ini sulit terdeteksi?
+  \item Seorang rekan mengusulkan menyimpan kolom \perintah{margin\_persen} pada
+        \perintah{fakta\_penjualan} agar tidak perlu dihitung berulang. Jelaskan
+        mengapa usulan ini keliru, dan sebutkan apa yang seharusnya disimpan
+        sebagai gantinya.
+  \item Mengapa \perintah{dim\_tanggal} dibangkitkan sampai 2029, padahal data
+        transaksi hanya sampai tahun berjalan? Apa akibatnya bila kalender hanya
+        dibangkitkan sepanjang rentang data yang ada?
+\end{enumerate}
+
+\section{Format Pengumpulan dan Checklist}
+
+Kumpulkan tiga skrip SQL yang dapat dijalankan berurutan. Sertakan hasil
+rekonsiliasi dan pastikan dimensi tanggal tidak hanya berisi nilai tanggal.
+
+Seluruh berkas diletakkan pada \berkas{modul-02-star-schema/}.
+
+\begin{ceklis}
+  \item \berkas{pre-lab.md}
+  \item \berkas{ddl.sql} --- memuat pernyataan grain sebagai komentar
+  \item \berkas{load.sql}
+  \item \berkas{query.sql} --- memuat ketiga star query
+  \item \berkas{rekonsiliasi.md}
+  \item \berkas{skema-bintang-2.md}
+  \item \berkas{jawaban-analisis.md}
+  \item Ketiga skrip dapat dijalankan berurutan pada basis data kosong tanpa
+        penyuntingan manual.
+\end{ceklis}
+
+\section{Troubleshooting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Masalah yang lazim muncul pada Modul 2 dan penanganannya}
+\label{tab:m2-troubleshooting}
+\begin{tabular}{@{}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.62\textwidth}@{}}
+\toprule
+\textbf{Gejala} & \textbf{Penanganan} \\
+\midrule
+\perintah{duplicate key value violates unique constraint} pada
+  \perintah{dim\_produk} &
+  Sumber memuat lebih dari satu baris untuk satu \perintah{produk\_id}, atau
+  skrip pemuatan dijalankan dua kali. Periksa dengan
+  \perintah{GROUP BY produk\_id HAVING COUNT(*) > 1}, lalu jadikan
+  \berkas{load.sql} idempoten. \\
+\perintah{insert or update violates foreign key constraint} pada fakta &
+  Ada natural key pada sumber yang tidak memiliki pasangan di dimensi. Muat
+  dimensi lebih dahulu, dan hitung berapa baris yang tidak menemukan pasangan. \\
+Jumlah baris fakta lebih sedikit daripada sumber &
+  \perintah{INNER JOIN} membuang baris tanpa pasangan dimensi. Ganti sementara
+  dengan \perintah{LEFT JOIN} untuk menemukan barisnya, lalu catat sebabnya. \\
+Angka star query lebih besar daripada sumber &
+  Terjadi penggandaan baris akibat join ke dimensi yang tidak unik. Pastikan
+  natural key setiap dimensi benar-benar \perintah{UNIQUE}. \\
+Angka star query lebih kecil daripada sumber &
+  Penyaringan status berbeda antara kedua sisi, atau baris fakta hilang saat
+  pemuatan. Periksa \perintah{WHERE} kedua query. \\
+Selisih kecil pada digit terakhir &
+  Perbedaan pembulatan. Samakan presisi \perintah{NUMERIC} kedua sisi dan
+  bandingkan dengan \perintah{ROUND(..., 2)}. \\
+Nama hari dan bulan berbahasa Inggris &
+  Setelan \perintah{lc\_time} basis data. Bukan kesalahan skrip; pilih satu
+  bahasa lalu gunakan secara konsisten. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ringkasan}
+
+Modul ini mengubah satu kalimat grain menjadi empat tabel yang berjalan. Tiga
+gagasan perlu dibawa ke Modul 3.
+
+\emph{Pertama}, surrogate key bukan formalitas. Ia yang membuat satu produk
+dapat memiliki beberapa versi tanpa memutus hubungan dengan tabel fakta --- dan
+itulah tepatnya yang dikerjakan Modul 3. \emph{Kedua}, denormalisasi adalah
+pertukaran yang harus dapat dijelaskan: ruang dan redundansi ditukar dengan
+hilangnya join, dan pada gudang data pertukaran itu hampir selalu
+menguntungkan. \emph{Ketiga}, angka yang tidak direkonsiliasi tidak dapat
+dipercaya; selisih yang dijelaskan adalah temuan, sedangkan selisih yang
+didiamkan adalah kegagalan.
+
+Satu hal sengaja ditunda. \perintah{dim\_produk} yang Anda bangun hari ini hanya
+menyimpan keadaan terkini: ketika harga sebuah produk berubah, versi lamanya
+hilang dan laporan tahun lalu ikut berubah. Modul 3 memperbaiki persoalan ini
+dengan SCD Type 2, dan struktur yang Anda buat sekarang sudah siap untuk itu.

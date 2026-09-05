@@ -1,0 +1,39 @@
+\chapter*{Kata Pengantar}
+\addcontentsline{toc}{chapter}{Kata Pengantar}
+\markboth{Kata Pengantar}{}
+
+Praktikum yang baik tidak sekadar menghasilkan sepuluh latihan yang berdiri sendiri. Setiap pertemuan seharusnya melanjutkan pekerjaan sebelumnya hingga terbentuk \emph{satu} artefak yang utuh dan terus berkembang. Setiap tahap menambahkan komponen baru, sekaligus membuat hasil dari tahap sebelumnya semakin berguna. Prinsip inilah yang menjadi dasar penyusunan modul praktikum ini.
+
+Pada Modul 1, mahasiswa memulai dengan memahami karakteristik sumber data dan kebutuhan analisis sebelum menentukan rancangan gudang data. Proses tersebut kemudian berkembang secara bertahap hingga Modul 10, ketika mahasiswa harus memastikan bahwa data dan angka yang disajikan dapat ditelusuri, diperiksa, dan dipercaya.
+
+Sepanjang proses tersebut, mahasiswa membangun satu gudang data secara bertahap. Pekerjaan dimulai dari penyusunan skema bintang, pengelolaan dimensi yang menyimpan riwayat perubahan, perancangan beberapa jenis \emph{fact table}, hingga penyusunan rancangan fisik yang mempertimbangkan kebutuhan penyimpanan dan kinerja. Mahasiswa kemudian melakukan optimisasi yang hasilnya harus dibuktikan melalui pengukuran, mengintegrasikan tiga sumber data yang dapat memuat informasi yang saling bertentangan, menuliskan proses transformasi sebagai kode yang dapat dijalankan kembali, dan akhirnya membangun dashboard untuk menjawab pertanyaan analitik yang telah mereka rumuskan sejak awal praktikum.
+
+Satu prinsip berlaku sejak halaman pertama hingga halaman terakhir:
+
+\textbf{setiap keputusan teknis harus dapat dijelaskan dan dipertanggungjawabkan}.
+
+Mahasiswa tidak cukup hanya memilih tipe data, menentukan urutan kolom pada indeks, memilih jenis \emph{fact table}, atau menetapkan ambang pada pengujian kualitas data. Mereka juga harus menjelaskan alasan di balik setiap pilihan tersebut. Jawaban yang menghasilkan keluaran benar tetapi tidak disertai alasan yang memadai hanya memperoleh sebagian nilai. Ketentuan ini bukan sekadar bagian dari mekanisme penilaian. Dalam praktiknya, gudang data harus dapat dipahami, dipelihara, dan dikembangkan oleh orang lain. Keputusan yang tidak terdokumentasi dengan baik akan menyulitkan proses tersebut.
+
+Modul ini juga sengaja menghadirkan sejumlah kondisi gagal. Pada beberapa bagian, mahasiswa diminta menjalankan \emph{query} yang menghasilkan keluaran keliru, memasang \emph{constraint} yang akan ditolak oleh sistem, memuat data yang tidak memenuhi aturan kualitas, atau membuat graf \emph{data lineage} yang tidak merepresentasikan aliran data dengan benar. Kegiatan tersebut dirancang agar mahasiswa tidak hanya mengenali kondisi ketika sistem bekerja dengan baik, tetapi juga memahami bagaimana kesalahan muncul dan bagaimana mendeteksinya.
+
+Kesalahan yang paling berbahaya dalam gudang data justru tidak selalu menghasilkan pesan galat. Sebuah \emph{join} yang tidak tepat dapat menggandakan nilai agregasi tanpa menghentikan \emph{query}. Perubahan pada data dimensi dapat membuat laporan periode sebelumnya menghasilkan angka yang berbeda ketika dihitung kembali. Sebuah toko juga dapat berhenti mengirimkan data tanpa menyebabkan proses pemuatan data gagal secara langsung. Sistem tetap berjalan, tetapi informasi yang dihasilkan tidak lagi mencerminkan kondisi sebenarnya. Karena itu, mahasiswa perlu belajar mengenali gejala kesalahan semacam ini melalui pengamatan dan pengujian langsung.
+
+Seluruh praktikum menggunakan dataset NusaMart, yaitu data sintetis sebuah perusahaan ritel fiktif yang memiliki 240 toko. Dataset ini tidak diambil dari sistem operasional nyata, melainkan dibangkitkan secara terkontrol agar berbagai persoalan dalam pergudangan data dapat dipelajari secara sistematis. Anomali disisipkan secara sengaja, konflik antarsumber dirancang sejak awal, dan setiap kasus memiliki kondisi acuan yang dapat digunakan untuk memeriksa hasil pekerjaan mahasiswa.
+
+Penyusunan modul ini juga memperoleh banyak masukan dari rekan pengajar dan asisten praktikum yang telah menguji alur kegiatan, instruksi, serta berbagai skenario di dalamnya. Pertanyaan dan kesulitan yang muncul dari mahasiswa pada pelaksanaan sebelumnya turut menjadi dasar dalam memperjelas sejumlah bagian modul.
+
+Modul ini akan terus dikembangkan seiring dengan pelaksanaan praktikum dan perkembangan teknologi pergudangan data. Saran, koreksi, dan temuan selama penggunaan modul sangat diharapkan. Tata cara penyampaian masukan dijelaskan lebih lanjut pada bagian Pendahuluan.
+
+
+\vspace{1.2cm}
+
+\noindent
+\begin{minipage}{\linewidth}
+\raggedleft
+Bandar Lampung, \doctanggal\par
+\vspace{0.35em}
+\textbf{\penyusun}\par
+{\color{Slate}Program Studi \programname\par}
+\end{minipage}
+
+\clearpage

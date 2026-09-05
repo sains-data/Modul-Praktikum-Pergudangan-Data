@@ -1,0 +1,785 @@
+\chapter{ETL Multi-Sumber dengan Python}
+\label{modul:etl-multi-sumber}
+
+\section{Identitas Modul}
+
+\begin{identitasmodul}
+\textbf{Sumber materi}    & Pertemuan 9 \\
+\textbf{CPMK}             & CPMK-092 \\
+\textbf{Minggu pelaksanaan} & Minggu ke-10 \\
+\textbf{Durasi tatap muka} & 120 menit \\
+\textbf{Estimasi tugas}   & 5--6 jam di luar sesi \\
+\textbf{Moda kerja}       & Individual \\
+\textbf{Perangkat}        & PostgreSQL 17, ekstensi \perintah{postgres\_fdw}, dan Python 3.11+ \\
+\textbf{Dataset}          & Tiga sumber operasional NusaMart yang sengaja tidak sepakat \\
+\textbf{Skrip pendukung}  & \berkas{etl/src/} beserta \berkas{sql/modul-07/check.sql} \\
+\textbf{Luaran}           & \berkas{pipeline.py}, \berkas{log-muat.md}, dan laporan konflik skema \\
+\end{identitasmodul}
+
+\slideref{9}
+
+\section{Capaian dan Indikator Keberhasilan}
+
+Mahasiswa mampu mengekstrak beberapa sumber, mengenali konflik, menstandardisasi
+data, melakukan object identification, serta memuat SCD-2 dan fakta secara
+idempoten. Baris tanpa pasangan dimensi harus diarahkan ke baris unknown.
+
+\begin{capaian}
+Pada akhir modul ini mahasiswa mampu:
+\begin{enumerate}[leftmargin=1.4em]
+  \item menghubungkan basis data sumber lain secara langsung dengan
+        \perintah{postgres\_fdw}, tanpa mengekspor berkas lebih dahulu;
+  \item mengenali dan menggolongkan konflik antarsumber --- penamaan, satuan,
+        pengodean, representasi, dan identitas;
+  \item menulis pipeline Python yang memisahkan tahap ekstraksi,
+        standardisasi, dan pemuatan secara tegas;
+  \item melakukan \istilah{object identification} sehingga satu pelanggan yang
+        tercatat berbeda di dua sumber menjadi satu baris dimensi;
+  \item menangani baris yang datang terlambat tanpa merusak histori dimensi;
+  \item membuktikan pipeline bersifat \istilah{idempoten} --- dijalankan dua
+        kali menghasilkan keadaan yang sama.
+\end{enumerate}
+\end{capaian}
+
+Sampai Modul 6, seluruh data berasal dari satu sumber yang sudah rapi dan
+sepakat dengan dirinya sendiri. Mulai modul ini persoalannya berbeda jenis:
+tiga sistem yang dibangun tim berbeda pada waktu berbeda, yang menyebut hal
+yang sama dengan nama berbeda --- dan kadang menyebut hal yang berbeda dengan
+nama yang sama.
+
+\section{Prasyarat dan Persiapan}
+
+\subsection{Prasyarat}
+
+\begin{itemize}
+  \item Python dasar: fungsi, \perintah{dict}, \perintah{list comprehension},
+        dan penanganan galat dengan \perintah{try};
+  \item \perintah{pandas} tingkat dasar: membaca \perintah{DataFrame},
+        menyaring, dan menggabungkan;
+  \item koneksi basis data dari Python dengan \perintah{psycopg2} atau
+        \perintah{SQLAlchemy};
+  \item pemuatan SCD-2 dari Modul 3, termasuk aturan menutup versi lama sebelum
+        membuka versi baru;
+  \item konsep baris unknown dari Modul 5.
+\end{itemize}
+
+\subsection{Pre-lab}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Aktifkan ekstensi pada basis data gudang:
+\begin{lstlisting}[style=sqlgaya]
+CREATE EXTENSION IF NOT EXISTS postgres_fdw;
+\end{lstlisting}
+  \item Pastikan ketiga basis data sumber dapat dijangkau. Ketiganya berada
+        pada container \perintah{postgres\_source} yang sama, sebagai tiga
+        basis data terpisah.
+\begin{lstlisting}[style=shellgaya]
+docker compose exec -T postgres_source \
+  psql -U praktikum -l | grep nusamart
+\end{lstlisting}
+  \item Siapkan lingkungan Python dan salin berkas konfigurasi:
+\begin{lstlisting}[style=shellgaya]
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp etl/config/.env.example .env
+\end{lstlisting}
+  \item Siapkan jawaban berikut pada \berkas{modul-07-etl/pre-lab.md}:
+  \begin{enumerate}[label=\alph*.,leftmargin=1.4em]
+    \item Sumber kedua menyimpan berat produk dalam kilogram, sumber pertama
+          dalam gram. Bila keduanya dimuat apa adanya, kesalahan apa yang
+          muncul, dan mengapa ia tidak akan menimbulkan galat?
+    \item Pelanggan yang sama tercatat sebagai ``Siti Nurhaliza'' di satu
+          sumber dan ``SITI NUR HALIZA'' di sumber lain. Sebutkan dua cara
+          memutuskan bahwa keduanya orang yang sama, beserta risiko
+          masing-masing.
+    \item Apa arti ``pipeline yang idempoten'', dan bagaimana Anda akan
+          mengujinya?
+  \end{enumerate}
+\end{enumerate}
+
+\section{Konsep Dasar}
+
+\subsection{Extract, Transform, dan Load}
+
+Ketiga tahap memiliki batas tanggung jawab yang tegas, dan kedisiplinan menjaga
+batas itulah yang membuat pipeline dapat diperbaiki ketika rusak.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}>{\raggedright\arraybackslash}p{0.40\textwidth}@{}}
+\toprule
+\textbf{Tahap} & \textbf{Tugasnya} & \textbf{Yang bukan tugasnya} \\
+\midrule
+Extract & Menyalin sumber apa adanya ke \perintah{staging} &
+  Membersihkan, menyaring, atau memperbaiki \\
+Transform & Menstandardisasi satuan, kode, dan identitas &
+  Memutuskan versi dimensi \\
+Load & Memuat dimensi SCD-2 dan fakta &
+  Mengubah nilai measure \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{peringatan}
+Godaan terbesar adalah membersihkan data pada tahap ekstraksi --- menyaring
+baris rusak, membetulkan satuan, membuang duplikat --- karena tampak lebih
+efisien. Jangan. Begitu data rusak tidak pernah sampai ke \perintah{staging},
+Anda kehilangan kemampuan menghitung berapa banyak yang rusak, dan
+rekonsiliasi Modul 10 tidak lagi mungkin. \textbf{Staging menampung, bukan
+menolak.}
+\end{peringatan}
+
+\subsection{Foreign Data Wrapper dan Staging}
+
+\perintah{postgres\_fdw} membuat tabel pada basis data lain tampak seperti
+tabel biasa. Tidak ada ekspor CSV, tidak ada berkas perantara, dan tidak ada
+langkah manual yang bisa terlewat.
+
+\begin{konsep}{Empat langkah menyiapkan FDW}
+\begin{enumerate}[leftmargin=1.4em]
+  \item \perintah{CREATE SERVER} --- mendaftarkan alamat basis data seberang.
+  \item \perintah{CREATE USER MAPPING} --- menyatakan kredensial yang dipakai.
+  \item \perintah{IMPORT FOREIGN SCHEMA} --- membuat definisi tabel asing.
+  \item \perintah{SELECT} --- dipakai seperti tabel biasa.
+\end{enumerate}
+\end{konsep}
+
+Kemudahan itu ada batasnya. Setiap query atas tabel asing menempuh jaringan,
+dan tidak seluruh operasi dapat didorong ke sisi seberang. Karena itu FDW
+dipakai untuk \emph{memindahkan sekali} ke \perintah{staging}, bukan sebagai
+sumber yang di-query berulang kali oleh laporan.
+
+\subsection{Standardisasi dan Object Identification}
+
+Konflik antarsumber muncul dalam beberapa jenis, dan mengenalinya lebih dahulu
+mempercepat penyelesaiannya.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+\toprule
+\textbf{Jenis konflik} & \textbf{Wujudnya} & \textbf{Contoh pada NusaMart} \\
+\midrule
+Penamaan & Nama kolom berbeda untuk hal sama &
+  \perintah{produk\_id} lawan \perintah{item\_code} \\
+Satuan & Besaran sama, satuan berbeda &
+  Berat dalam gram lawan kilogram \\
+Pengodean & Nilai sama, kode berbeda &
+  Kategori \perintah{MNM} lawan \perintah{BEV} \\
+Representasi & Format berbeda &
+  Tanggal, huruf besar-kecil, tanda baca \\
+Identitas & Entitas sama, catatan berbeda &
+  Satu pelanggan pada dua sumber \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Empat jenis pertama diselesaikan dengan aturan yang dapat ditulis sekali.
+Jenis kelima berbeda: ia memerlukan \emph{keputusan}, dan keputusan itu bisa
+salah.
+
+\begin{konsep}{Object identification dalam empat langkah}
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Normalisasi.} Huruf kecil semua, buang tanda baca, rapatkan
+        spasi ganda, buang gelar dan sapaan.
+  \item \textbf{Blocking.} Bandingkan hanya calon yang masuk akal --- misalnya
+        yang kotanya sama. Tanpa ini, 100 ribu pelanggan menuntut lima miliar
+        perbandingan.
+  \item \textbf{Penilaian.} Hitung kemiripan nama, lalu gabungkan dengan
+        kecocokan atribut lain seperti tanggal lahir.
+  \item \textbf{Ambang dan keputusan.} Di atas ambang: satu orang. Di bawah
+        ambang: dua orang. Di sekitar ambang: \emph{ditinjau manusia}.
+\end{enumerate}
+\end{konsep}
+
+\begin{peringatan}
+Ambang yang terlalu longgar menggabungkan dua orang berbeda menjadi satu ---
+seluruh transaksi mereka bercampur, dan kesalahan ini nyaris mustahil
+ditemukan kembali. Ambang yang terlalu ketat membiarkan satu orang tercatat
+dua kali --- kesalahan yang lebih mudah ditemukan dan diperbaiki.
+
+Bila ragu, pilih yang terlalu ketat. Menggabungkan dua baris nanti jauh lebih
+mudah daripada memisahkan transaksi yang sudah tercampur.
+\end{peringatan}
+
+Sesudah dua catatan dinyatakan sebagai satu orang, muncul pertanyaan
+berikutnya: nilai mana yang dipakai? Inilah \istilah{survivorship}. Aturannya
+harus ditulis --- misalnya ``sumber pertama menang untuk alamat, catatan
+terbaru menang untuk nomor telepon'' --- bukan diputuskan diam-diam oleh
+urutan pemrosesan.
+
+\subsection{Late-arriving Data dan Unknown Member}
+
+Sebagian transaksi dari sumber ketiga baru sampai tiga hari sesudah kejadian.
+Ini menimbulkan dua persoalan yang berbeda dan sering tertukar.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Persoalan} & \textbf{Wujudnya} & \textbf{Penanganan} \\
+\midrule
+\istilah{Late-arriving fact} & Transaksi lama baru sampai hari ini &
+  Cari versi dimensi yang berlaku pada tanggal \emph{transaksi}, bukan hari
+  ini \\
+\istilah{Late-arriving dimension} & Fakta menyebut produk yang belum ada di
+  dimensi & Arahkan ke baris unknown, atau buat versi awal beruntung \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Yang pertama sudah Anda tangani sejak Modul 3: pencarian kunci berbasis rentang
+tanggal, bukan \perintah{baris\_kini}. Justru karena itulah bentuk join tersebut
+dipilih sejak awal --- dan pada modul ini manfaatnya baru benar-benar terasa.
+
+\subsection{Idempotensi dan Audit Pemuatan}
+
+\begin{konsep}{Pipeline yang idempoten}
+Menjalankan pipeline dua kali atas masukan yang sama menghasilkan keadaan basis
+data yang \emph{sama persis} dengan menjalankannya sekali. Tidak ada baris
+kembar, tidak ada versi dimensi tambahan, dan tidak ada measure yang terhitung
+dua kali.
+\end{konsep}
+
+Ini bukan kemewahan. Pipeline gagal di tengah jalan adalah hal biasa, dan
+satu-satunya penanganan yang aman adalah menjalankannya ulang. Pipeline yang
+tidak idempoten membuat setiap kegagalan menuntut pembersihan manual.
+
+Tiga teknik yang dipakai modul ini:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Kunci alami pada staging} --- pemuatan ulang menimpa, bukan
+        menambah, dengan \perintah{ON CONFLICT DO UPDATE}.
+  \item \textbf{Hapus-lalu-muat per batch} --- fakta satu tanggal dihapus lebih
+        dahulu sebelum dimuat ulang.
+  \item \textbf{Perbandingan atribut sebelum membuat versi} --- SCD-2 hanya
+        membuat versi baru bila atributnya benar-benar berubah, sebagaimana
+        Modul 3.
+\end{enumerate}
+
+Setiap jalannya pipeline mencatat dirinya pada tabel audit: berapa baris
+dibaca, dimuat, dan ditolak per sumber. Tabel ini menjadi bahan
+\istilah{audit dimension} pada Modul 8 dan rekonsiliasi pada Modul 10.
+
+\section{Studi Kasus dan Protokol Praktikum}
+
+Dua sumber tambahan sengaja memakai gram dan kilogram, kode kategori berbeda,
+ejaan pelanggan tidak konsisten, serta transaksi terlambat tiga hari.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.52\textwidth}@{}}
+\toprule
+\textbf{Basis data} & \textbf{Peran} & \textbf{Ciri yang menyulitkan} \\
+\midrule
+\perintah{nusamart\_oltp} & Sumber utama & Acuan penamaan; berat dalam gram \\
+\perintah{nusamart\_barat} & Hasil akuisisi & Nama kolom berbahasa Inggris;
+  berat dalam kilogram; kode kategori sendiri \\
+\perintah{nusamart\_timur} & Wilayah timur & Ejaan pelanggan tidak konsisten;
+  transaksi sampai terlambat tiga hari \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Dimensi pelanggan yang sengaja ditunda sejak Modul 2 akhirnya dibangun pada
+modul ini. Penundaannya beralasan: membangun \perintah{dim\_pelanggan} dari
+satu sumber tidak mengajarkan apa pun, sedangkan membangunnya dari tiga sumber
+yang tidak sepakat adalah inti persoalan integrasi data.
+
+\begin{catatanasisten}
+Ketiga basis data berada pada container \perintah{postgres\_source} yang sama,
+sehingga \berkas{docker-compose.yml} tidak bertambah layanannya. Yang berubah
+hanya skrip seed: ia kini membangkitkan tiga basis data dengan
+\perintah{--seed} yang sama tetapi aturan penamaan dan satuan yang berbeda.
+
+Pastikan konflik yang ditanam \emph{terdokumentasi} pada berkas asisten, tetapi
+\emph{tidak} dibagikan ke mahasiswa. Menemukan konflik adalah pekerjaan
+Bagian~B.
+\end{catatanasisten}
+
+\section{Alur Praktikum 120 Menit}
+
+\begin{alurwaktu}
+0--15 & Demonstrasi FDW dan satu konflik skema. \\
+15--95 & Kerja terbimbing: profiling, transformasi, identity resolution, dan load. \\
+95--110 & Checkpoint hasil rekonsiliasi dan penanganan unknown member. \\
+110--120 & Penjelasan pembuktian idempotensi. \\
+\end{alurwaktu}
+
+\section{Prosedur Praktikum Terbimbing}
+
+\subsection{Bagian A: Menghubungkan Sumber dengan FDW}
+
+\langkah{A.1 Mendaftarkan server dan pemetaan pengguna}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE SERVER src_barat FOREIGN DATA WRAPPER postgres_fdw
+  OPTIONS (host 'postgres_source', port '5432', dbname 'nusamart_barat');
+
+CREATE USER MAPPING FOR CURRENT_USER SERVER src_barat
+  OPTIONS (user 'praktikum', password 'ganti-nilai-ini');
+
+CREATE SCHEMA IF NOT EXISTS src_barat;
+IMPORT FOREIGN SCHEMA public FROM SERVER src_barat INTO src_barat;
+\end{lstlisting}
+
+\begin{catatan}
+Perhatikan \perintah{host 'postgres\_source'} dan \perintah{port '5432'} ---
+nama layanan dan port \emph{di dalam} jaringan Docker, bukan
+\perintah{localhost:5433} yang Anda pakai dari laptop. Kekeliruan ini
+menimbulkan pesan \emph{could not connect to server} yang membingungkan karena
+koneksi dari DBeaver jelas berhasil.
+\end{catatan}
+
+Ulangi untuk \perintah{src\_timur}, lalu uji akses:
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT COUNT(*) FROM src_barat.item;
+SELECT COUNT(*) FROM src_timur.pelanggan;
+\end{lstlisting}
+
+\subsection{Bagian B: Memprofilkan Konflik Sumber}
+
+\langkah{B.1 Membandingkan struktur ketiga sumber}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT table_schema, table_name, column_name, data_type
+FROM   information_schema.columns
+WHERE  table_schema IN ('src_barat', 'src_timur')
+ORDER  BY table_schema, table_name, ordinal_position;
+\end{lstlisting}
+
+Susun tabel pemetaan kolom pada \berkas{laporan-konflik.md}: untuk setiap
+konsep bisnis, nama kolomnya pada masing-masing sumber.
+
+\langkah{B.2 Menemukan konflik satuan dan pengodean}{10 menit}
+
+Konflik satuan tidak terlihat dari nama kolom. Ia terlihat dari
+\emph{sebaran nilai}.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Bandingkan besaran yang seharusnya setara.
+SELECT 'oltp (gram)' AS sumber,
+       MIN(berat_gram), ROUND(AVG(berat_gram), 2), MAX(berat_gram)
+FROM   src_oltp.produk
+UNION ALL
+SELECT 'barat (?)', MIN(weight_kg), ROUND(AVG(weight_kg), 2), MAX(weight_kg)
+FROM   src_barat.item;
+
+-- Kode kategori yang dipakai masing-masing sumber.
+SELECT 'oltp' AS sumber, kode_kategori, COUNT(*)
+FROM   src_oltp.kategori GROUP BY 1, 2
+UNION ALL
+SELECT 'barat', category_code, COUNT(*)
+FROM   src_barat.item_category GROUP BY 1, 2
+ORDER  BY 1, 2;
+\end{lstlisting}
+
+Rata-rata yang berselisih sekitar seribu kali adalah tanda konflik satuan.
+Catat temuan ini beserta angkanya --- inilah jenis bukti yang diminta.
+
+\langkah{B.3 Menemukan konflik identitas}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+-- Calon pelanggan yang sama, terlihat dari nama yang dinormalkan.
+SELECT lower(regexp_replace(nama, '[^a-zA-Z ]', '', 'g')) AS nama_normal,
+       COUNT(*) AS jumlah_catatan,
+       string_agg(DISTINCT sumber, ', ') AS muncul_di
+FROM ( SELECT nama, 'oltp'  AS sumber FROM src_oltp.pelanggan
+       UNION ALL
+       SELECT cust_name, 'barat' FROM src_barat.customer
+       UNION ALL
+       SELECT nama, 'timur'  FROM src_timur.pelanggan ) g
+GROUP  BY 1
+HAVING COUNT(*) > 1
+ORDER  BY jumlah_catatan DESC
+LIMIT  20;
+\end{lstlisting}
+
+Lengkapi \berkas{laporan-konflik.md} dengan sekurang-kurangnya \textbf{lima}
+konflik, masing-masing disertai jenisnya, buktinya berupa angka, dan aturan
+penyelesaian yang Anda usulkan.
+
+\begin{luaran}
+\berkas{modul-07-etl/laporan-konflik.md} --- tabel pemetaan kolom, lima konflik
+beserta bukti angka, dan aturan penyelesaian untuk masing-masing.
+\end{luaran}
+
+\subsection{Bagian C: Menulis Transformasi Python}
+
+\langkah{C.1 Menyusun kerangka pipeline}{10 menit}
+
+Kerangka tersedia pada \berkas{etl/src/}. Perhatikan pemisahan tahapnya ---
+inilah yang membuat pipeline dapat diuji sebagian.
+
+\begin{lstlisting}[style=pythongaya]
+# pipeline.py
+from extract   import ekstrak_semua_sumber
+from transform import standardisasi, identifikasi_pelanggan
+from load      import muat_dimensi, muat_fakta
+from audit     import mulai_batch, selesai_batch
+
+def jalankan(tanggal_batch):
+    batch = mulai_batch(tanggal_batch)
+    mentah = ekstrak_semua_sumber(batch)        # -> staging, apa adanya
+    bersih = standardisasi(mentah)              # satuan, kode, format
+    bersih = identifikasi_pelanggan(bersih)     # -> pelanggan_master_id
+    muat_dimensi(bersih, batch)                 # SCD-2
+    muat_fakta(bersih, batch)                   # + baris unknown
+    selesai_batch(batch)
+\end{lstlisting}
+
+\langkah{C.2 Menstandardisasi satuan dan kode}{15 menit}
+
+\begin{lstlisting}[style=pythongaya]
+# Aturan konversi ditulis sebagai data, bukan sebagai percabangan if.
+# Menambah sumber keempat berarti menambah satu baris, bukan mengubah kode.
+KONVERSI_BERAT = {
+    "oltp":  1.0,      # sudah gram
+    "barat": 1000.0,   # kilogram -> gram
+    "timur": 1.0,
+}
+
+PETA_KATEGORI = {
+    ("barat", "BEV"): "MNM",
+    ("barat", "SNK"): "MKN",
+    ("timur", "DRK"): "MNM",
+}
+
+def standardisasi(df):
+    df["berat_gram"] = df.apply(
+        lambda r: r["berat"] * KONVERSI_BERAT[r["sumber"]], axis=1)
+
+    df["kode_kategori"] = df.apply(
+        lambda r: PETA_KATEGORI.get((r["sumber"], r["kode_kategori"]),
+                                    r["kode_kategori"]), axis=1)
+    return df
+\end{lstlisting}
+
+\begin{catatan}
+Menulis aturan sebagai \perintah{dict} dan bukan sebagai rangkaian
+\perintah{if} bukan sekadar selera. Aturan yang berupa data dapat dicetak,
+diperiksa, diuji, dan --- pada Modul 8 --- didokumentasikan sebagai metadata.
+Aturan yang tersembunyi di dalam percabangan hanya dapat dibaca oleh yang
+menulisnya.
+\end{catatan}
+
+\langkah{C.3 Mengidentifikasi pelanggan lintas sumber}{15 menit}
+
+\begin{lstlisting}[style=pythongaya]
+import re
+from difflib import SequenceMatcher
+
+GELAR = {"bapak", "ibu", "bpk", "sdr", "sdri", "h", "hj", "drs", "ir"}
+AMBANG = 0.88
+
+def normalkan(nama):
+    n = re.sub(r"[^a-z ]", " ", nama.lower())
+    kata = [k for k in n.split() if k not in GELAR]
+    return " ".join(kata)
+
+def mirip(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
+def identifikasi_pelanggan(catatan):
+    """Blocking menurut kota, lalu penilaian kemiripan nama."""
+    master, ragu = {}, []
+    for kota, kelompok in kelompokkan(catatan, kunci="kota"):
+        wakil = []                       # (nama_normal, master_id)
+        for c in kelompok:
+            n = normalkan(c["nama"])
+            cocok = [(mirip(n, wn), mid) for wn, mid in wakil]
+            skor, mid = max(cocok, default=(0.0, None))
+
+            if skor >= AMBANG:
+                master[c["id_sumber"]] = mid
+            elif skor >= AMBANG - 0.08:
+                ragu.append((c, skor, mid))      # ditinjau manusia
+            else:
+                mid = master_id_baru()
+                wakil.append((n, mid))
+                master[c["id_sumber"]] = mid
+    return master, ragu
+\end{lstlisting}
+
+Simpan daftar \perintah{ragu} ke \berkas{tinjau-manual.csv}. Jumlah barisnya
+adalah bagian dari laporan --- pipeline yang tidak pernah ragu hampir pasti
+ambangnya terlalu longgar.
+
+\begin{peringatan}
+Blocking menurut kota mempercepat proses, tetapi juga berarti pelanggan yang
+sama dengan kota berbeda \emph{tidak akan pernah} dibandingkan. Ini pertukaran
+yang disengaja dan harus Anda catat sebagai keterbatasan pada laporan, bukan
+disembunyikan.
+\end{peringatan}
+
+\subsection{Bagian D: Memuat Dimensi dan Fakta}
+
+\langkah{D.1 Membangun dan memuat dim\_pelanggan}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE gudang.dim_pelanggan (
+  pelanggan_key   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  pelanggan_id    INTEGER      NOT NULL,   -- master id hasil identifikasi
+  nama            VARCHAR(120) NOT NULL,
+  kota            VARCHAR(60),
+  segmen          VARCHAR(30),
+  sumber_asal     VARCHAR(10)  NOT NULL,   -- sumber yang memenangkan nilai
+  mulai_berlaku   DATE    NOT NULL,
+  selesai_berlaku DATE    NOT NULL,
+  baris_kini      BOOLEAN NOT NULL,
+  versi           SMALLINT NOT NULL
+);
+
+CREATE UNIQUE INDEX uq_dim_pelanggan_kini
+  ON gudang.dim_pelanggan (pelanggan_id) WHERE baris_kini;
+
+ALTER TABLE gudang.dim_pelanggan ADD CONSTRAINT ex_dim_pelanggan_rentang
+  EXCLUDE USING gist (
+    pelanggan_id WITH =,
+    daterange(mulai_berlaku, selesai_berlaku, '[)') WITH &&);
+\end{lstlisting}
+
+Struktur SCD-2-nya sama persis dengan \perintah{dim\_produk} Modul 3, termasuk
+kedua penjaganya. Jangan lupa baris unknown berkunci $-1$ sebagaimana Modul 5.
+
+\langkah{D.2 Memuat fakta dengan penanganan keterlambatan}{15 menit}
+
+\begin{lstlisting}[style=pythongaya]
+SQL_MUAT_FAKTA = """
+INSERT INTO gudang.fakta_penjualan (
+  tanggal_key, produk_key, toko_key, pelanggan_key, flag_key,
+  nomor_struk, transaksi_id, kuantitas, harga_satuan, diskon, subtotal)
+SELECT dt.tanggal_key,
+       COALESCE(dp.produk_key, -1),        -- baris unknown, bukan NULL
+       COALESCE(dtk.toko_key, -1),
+       COALESCE(dpl.pelanggan_key, -1),
+       COALESCE(fl.flag_key, -1),
+       s.nomor_struk, s.transaksi_id,
+       s.kuantitas, s.harga_satuan, s.diskon, s.subtotal
+FROM       staging.penjualan_gabungan s
+JOIN       gudang.dim_tanggal dt ON dt.tanggal = s.waktu_transaksi::DATE
+-- LEFT JOIN, bukan JOIN: baris tanpa pasangan harus tetap masuk
+LEFT JOIN  gudang.dim_produk dp
+       ON  dp.produk_id = s.produk_id
+       AND s.waktu_transaksi::DATE >= dp.mulai_berlaku
+       AND s.waktu_transaksi::DATE <  dp.selesai_berlaku
+LEFT JOIN  gudang.dim_pelanggan dpl
+       ON  dpl.pelanggan_id = s.pelanggan_master_id
+       AND s.waktu_transaksi::DATE >= dpl.mulai_berlaku
+       AND s.waktu_transaksi::DATE <  dpl.selesai_berlaku
+LEFT JOIN  gudang.dim_toko dtk ON dtk.toko_id = s.toko_id
+LEFT JOIN  gudang.dim_transaksi_flag fl
+       ON  fl.metode_bayar = s.metode_bayar AND fl.status = s.status
+WHERE  s.batch_id = %(batch)s;
+"""
+\end{lstlisting}
+
+Dua hal menentukan kebenaran perintah ini. \perintah{LEFT JOIN} memastikan
+baris tanpa pasangan tetap masuk, dan \perintah{COALESCE(..., -1)} mengarahkan
+kunci yang kosong ke baris unknown --- bukan membiarkannya \perintah{NULL}.
+Pencarian dimensi tetap memakai rentang tanggal transaksi, sehingga transaksi
+yang terlambat tiga hari tetap menunjuk versi yang berlaku saat ia terjadi.
+
+\langkah{D.3 Mencatat audit pemuatan}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE gudang.audit_muat (
+  batch_id       BIGINT      NOT NULL,
+  tahap          VARCHAR(20) NOT NULL,
+  sumber         VARCHAR(10) NOT NULL,
+  baris_dibaca   BIGINT      NOT NULL,
+  baris_dimuat   BIGINT      NOT NULL,
+  baris_unknown  BIGINT      NOT NULL DEFAULT 0,
+  mulai          TIMESTAMP   NOT NULL,
+  selesai        TIMESTAMP,
+  PRIMARY KEY (batch_id, tahap, sumber)
+);
+\end{lstlisting}
+
+Setiap jalannya pipeline mengisi tabel ini. Selisih antara
+\perintah{baris\_dibaca} dan \perintah{baris\_dimuat} wajib dapat dijelaskan.
+
+\begin{luaran}
+\berkas{modul-07-etl/pipeline.py} beserta modul pendukungnya,
+\berkas{log-muat.md} berisi isi tabel audit untuk dua kali jalan, dan
+\berkas{tinjau-manual.csv}.
+\end{luaran}
+
+\begin{checkpoint}
+Asisten menjalankan \berkas{sql/modul-07/check.sql} dan memeriksa butir berikut:
+\begin{ceklis}
+  \item ketiga sumber terhubung lewat \perintah{postgres\_fdw};
+  \item berat produk sudah dalam satuan yang sama, terbukti dari sebaran
+        nilainya;
+  \item kode kategori sudah terstandardisasi;
+  \item pelanggan yang sama dari dua sumber menjadi \textbf{satu} baris
+        dimensi;
+  \item tidak ada foreign key fakta yang \perintah{NULL} --- seluruhnya
+        menunjuk dimensi atau baris unknown;
+  \item transaksi yang datang terlambat menunjuk versi dimensi yang berlaku
+        saat transaksi terjadi, bukan versi kini;
+  \item tabel \perintah{audit\_muat} terisi dan selisihnya dapat dijelaskan;
+  \item \berkas{laporan-konflik.md} memuat sekurang-kurangnya lima konflik
+        beserta bukti angka.
+\end{ceklis}
+\end{checkpoint}
+
+\section{Latihan Mandiri di Kelas}
+
+\latihan{Menambahkan satu konflik baru}
+
+Sumber \perintah{nusamart\_timur} mencatat tanggal transaksi dalam zona waktu
+setempat tanpa penanda zona, sedangkan sumber utama memakai UTC.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Tulis query yang membuktikan adanya perbedaan ini dari data, bukan dari
+        dugaan.
+  \item Berapa banyak transaksi yang akan jatuh pada \emph{tanggal yang salah}
+        bila perbedaan itu diabaikan?
+  \item Tulis aturan penyelesaiannya, lalu jelaskan di tahap mana aturan itu
+        seharusnya diterapkan --- extract, transform, atau load.
+\end{enumerate}
+
+\latihan{Menguji ambang identifikasi}
+
+Jalankan ulang identifikasi pelanggan dengan tiga ambang: 0,80, 0,88, dan 0,95.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Berapa jumlah pelanggan master yang dihasilkan masing-masing?
+  \item Ambil satu pasangan yang tergabung pada 0,80 tetapi terpisah pada 0,95.
+        Menurut Anda, mana yang benar?
+  \item Ambang mana yang Anda pilih, dan bukti apa yang akan Anda minta sebelum
+        menaikkan atau menurunkannya?
+\end{enumerate}
+
+\section{Tugas Individu}
+
+\subsection{Pekerjaan Wajib}
+Jalankan pipeline dua kali berturut-turut dan buktikan jumlah baris stabil serta
+tidak terbentuk versi dimensi kembar.
+
+Kumpulkan \berkas{bukti-idempotensi.md} yang memuat:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item jumlah baris setiap tabel gudang sesudah jalan pertama dan sesudah
+        jalan kedua, disandingkan dalam satu tabel;
+  \item jumlah versi dimensi per natural key sebelum dan sesudah jalan kedua,
+        membuktikan tidak ada versi kembar terbentuk;
+  \item isi \perintah{audit\_muat} untuk kedua jalan;
+  \item bila ada selisih, penjelasan penyebabnya dan perbaikan yang Anda
+        lakukan --- selisih yang dijelaskan lebih bernilai daripada selisih
+        yang disembunyikan;
+  \item satu paragraf tentang bagian pipeline mana yang paling rapuh terhadap
+        pengulangan, beserta alasannya.
+\end{enumerate}
+
+\subsection{Pertanyaan Analisis}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Ambang identifikasi Anda menggabungkan dua orang yang sebenarnya
+        berbeda. Jelaskan bagaimana kesalahan ini akan tampak pada laporan
+        penjualan, dan mengapa ia jauh lebih sulit ditemukan daripada
+        kesalahan sebaliknya.
+  \item Sumber kedua mengirim ulang seluruh data tiga bulan terakhir setiap
+        malam, bukan hanya data yang berubah. Apa akibatnya bagi pipeline Anda,
+        dan bagaimana Anda menanganinya tanpa membuat versi dimensi kembar?
+  \item Pipeline Anda mengarahkan produk yang tidak dikenal ke baris unknown.
+        Sebulan kemudian produk itu muncul di dimensi. Apakah baris fakta lama
+        diperbaiki, dibiarkan, atau dimuat ulang? Uraikan konsekuensi ketiga
+        pilihan.
+\end{enumerate}
+
+\section{Format Pengumpulan dan Checklist}
+
+Kumpulkan pipeline, konfigurasi contoh tanpa kredensial, log muat, laporan
+konflik, dan bukti dua kali eksekusi.
+
+Seluruh berkas diletakkan pada \berkas{modul-07-etl/}.
+
+\begin{ceklis}
+  \item \berkas{pre-lab.md}
+  \item \berkas{ddl-fdw.sql} dan \berkas{ddl-dim-pelanggan.sql}
+  \item \berkas{laporan-konflik.md} --- lima konflik beserta bukti angka
+  \item \berkas{pipeline.py} beserta modul pendukungnya
+  \item \berkas{.env.example} --- \textbf{tanpa} kredensial sebenarnya
+  \item \berkas{log-muat.md} dan \berkas{tinjau-manual.csv}
+  \item \berkas{bukti-idempotensi.md}
+  \item \berkas{jawaban-analisis.md}
+\end{ceklis}
+
+\begin{peringatan}
+Berkas \berkas{.env} berisi kata sandi dan \textbf{tidak boleh} masuk
+repositori. Periksa \berkas{.gitignore} sebelum melakukan commit. Kredensial
+yang pernah ter-commit tetap ada pada riwayat Git meskipun berkasnya kemudian
+dihapus.
+\end{peringatan}
+
+\section{Troubleshooting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Masalah yang lazim muncul pada Modul 7 dan penanganannya}
+\label{tab:m7-troubleshooting}
+\begin{tabular}{@{}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.62\textwidth}@{}}
+\toprule
+\textbf{Gejala} & \textbf{Penanganan} \\
+\midrule
+\perintah{could not connect to server} pada FDW &
+  Alamat memakai \perintah{localhost:5433} milik laptop. Dari dalam jaringan
+  Docker, alamatnya \perintah{postgres\_source:5432}. \\
+\perintah{password authentication failed} pada FDW &
+  Kata sandi pada \perintah{USER MAPPING} berbeda dengan
+  \berkas{.env}. Perbarui pemetaannya dengan
+  \perintah{ALTER USER MAPPING}. \\
+\perintah{relation "src\_barat.item" does not exist} &
+  \perintah{IMPORT FOREIGN SCHEMA} belum dijalankan, atau schema sumbernya
+  bukan \perintah{public}. \\
+Angka berat berselisih sekitar seribu kali &
+  Konflik satuan gram lawan kilogram. Bukan kerusakan data --- terapkan
+  konversi pada tahap transform. \\
+Jumlah pelanggan master jauh lebih kecil daripada dugaan &
+  Ambang terlalu longgar sehingga orang berbeda tergabung. Naikkan ambang, dan
+  periksa daftar \berkas{tinjau-manual.csv}. \\
+Jumlah pelanggan master hampir sama dengan jumlah catatan &
+  Ambang terlalu ketat, atau normalisasi nama belum dijalankan. Periksa
+  keluaran fungsi \perintah{normalkan}. \\
+Versi dimensi bertambah setiap pipeline dijalankan &
+  Perbandingan atribut memakai \perintah{<>} sehingga perubahan dari atau
+  menuju \perintah{NULL} lolos. Gunakan \perintah{IS DISTINCT FROM},
+  sebagaimana Modul 3. \\
+Jumlah baris fakta berlipat setelah jalan kedua &
+  Fakta dimuat tanpa menghapus batch yang sama lebih dahulu. Terapkan
+  hapus-lalu-muat per batch. \\
+Transaksi terlambat menunjuk harga hari ini &
+  Pencarian kunci memakai \perintah{baris\_kini}. Ganti dengan rentang tanggal
+  transaksi. \\
+\perintah{UnicodeDecodeError} saat membaca sumber &
+  Encoding sumber berbeda. Nyatakan encoding secara eksplisit saat koneksi,
+  jangan bergantung pada nilai asali sistem. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ringkasan}
+
+Modul ini memperlihatkan bahwa ETL bukan pemindahan data, melainkan
+\textbf{rekonsiliasi makna}. Tiga sumber yang sama-sama benar menurut
+sistemnya sendiri tidak otomatis dapat digabungkan, dan pekerjaan menyatukannya
+sebagian besar adalah keputusan --- satuan mana yang dipakai, kode mana yang
+menang, dan dua catatan ini orang yang sama atau bukan.
+
+Tiga gagasan perlu dibawa ke Modul 8. \emph{Pertama}, batas antartahap harus
+dijaga: staging menampung apa adanya, dan pembersihan yang dilakukan terlalu
+awal menghapus bukti yang diperlukan untuk rekonsiliasi. \emph{Kedua},
+keputusan identitas dapat salah, dan kesalahan yang menggabungkan dua orang
+jauh lebih berbahaya daripada yang memisahkan satu orang --- karena yang
+pertama nyaris mustahil ditemukan kembali. \emph{Ketiga}, pipeline yang tidak
+idempoten membuat setiap kegagalan menuntut pembersihan manual, dan kegagalan
+adalah hal biasa.
+
+Aturan transformasi yang Anda tulis sebagai \perintah{dict} hari ini dan tabel
+\perintah{audit\_muat} yang Anda isi menjadi bahan langsung Modul 8: keduanya
+adalah \emph{metadata}, dan Modul 8 mengubah transformasi menjadi kode yang
+mendokumentasikan dirinya sendiri beserta graf lineage-nya.

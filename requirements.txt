@@ -1,0 +1,7 @@
+# Modul Praktikum Pergudangan Data -- dependensi Python
+# Dipakai mulai Modul 7 (ETL multi-sumber) dan Modul 10 (kualitas data).
+psycopg2-binary>=2.9
+SQLAlchemy>=2.0
+pandas>=2.1
+Faker>=22.0
+python-dotenv>=1.0

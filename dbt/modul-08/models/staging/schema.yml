@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_penjualan
+    description: >
+      Penjualan dari tiga sumber, sudah diseragamkan nama kolomnya dan
+      disaring dari transaksi berstatus BATAL.
+    columns:
+      - name: transaksi_id
+        tests:
+          - not_null
+      - name: tanggal_transaksi
+        description: Tanggal transaksi terjadi, bukan tanggal baris dimuat.
+        tests:
+          - not_null
+
+  - name: stg_produk
+    description: Produk dari tiga sumber, berat sudah dalam gram.
+
+  # TODO (dikerjakan mahasiswa): tambahkan blok untuk stg_toko.

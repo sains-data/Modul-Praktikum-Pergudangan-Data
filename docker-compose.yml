@@ -1,0 +1,143 @@
+# =============================================================================
+# Lingkungan Praktikum Pergudangan Data (SD25-31007)
+#
+#   docker compose pull      # dikerjakan di rumah, bukan di laboratorium
+#   docker compose up -d
+#   docker compose ps
+#
+# Tiga layanan, sesuai RANCANGAN-PRAKTIKUM.md §2.4:
+#
+#   postgres_source  5433  sistem operasional NusaMart (empat basis data)
+#   postgres_dw      5434  gudang data yang dibangun mahasiswa
+#   superset         8088  dashboard, dipakai mulai Modul 9
+#
+# Port sengaja digeser dari 5432 agar tidak berbenturan dengan PostgreSQL yang
+# mungkin sudah terpasang langsung di laptop.
+#
+# PENTING: dari DALAM jaringan Docker, alamat layanan adalah
+# "postgres_source:5432" dan "postgres_dw:5432" -- bukan localhost:5433 dan
+# localhost:5434 yang dipakai dari laptop. Kekeliruan ini menghadang mahasiswa
+# dua kali: pada postgres_fdw (Modul 7) dan pada koneksi Superset (Modul 9).
+# =============================================================================
+
+name: praktikum-pgd
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Sistem operasional NusaMart.
+  #
+  # Satu container memuat empat basis data terpisah:
+  #   nusamart_oltp    sumber utama, dipakai sejak Modul 1
+  #   nusamart_barat   sumber kedua hasil akuisisi, dipakai mulai Modul 7
+  #   nusamart_timur   sumber ketiga, dipakai mulai Modul 7
+  #   northwind        pembanding pada Modul 6
+  #
+  # postgres_fdw tetap benar-benar melintasi basis data, tetapi jumlah layanan
+  # tidak bertambah.
+  # ---------------------------------------------------------------------------
+  postgres_source:
+    image: postgres:17-alpine
+    container_name: pgd_source
+    environment:
+      POSTGRES_USER: ${SRC_USER:-praktikum}
+      POSTGRES_PASSWORD: ${SRC_PASSWORD:?SRC_PASSWORD wajib diisi pada .env}
+      POSTGRES_DB: nusamart_oltp
+      # Nama hari dan bulan mengikuti setelan ini. Pilih satu, lalu jangan
+      # mencampurnya di tengah semester (lihat peringatan Modul 2 Bagian A.1).
+      LANG: en_US.utf8
+    ports:
+      - "5433:5432"
+    volumes:
+      - source_data:/var/lib/postgresql/data
+      # Skrip pada direktori ini dijalankan HANYA saat volume pertama kali
+      # dibuat. Untuk menjalankannya ulang: docker compose down -v
+      - ./seed/init-source:/docker-entrypoint-initdb.d:ro
+      - ./seed:/seed:ro
+      - ./sql:/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SRC_USER:-praktikum} -d nusamart_oltp"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Gudang data. Kosong pada Modul 1; diisi mahasiswa mulai Modul 2.
+  # ---------------------------------------------------------------------------
+  postgres_dw:
+    image: postgres:17-alpine
+    container_name: pgd_dw
+    environment:
+      POSTGRES_USER: ${DW_USER:-praktikum}
+      POSTGRES_PASSWORD: ${DW_PASSWORD:?DW_PASSWORD wajib diisi pada .env}
+      POSTGRES_DB: nusamart_dw
+      LANG: en_US.utf8
+    ports:
+      - "5434:5432"
+    volumes:
+      - dw_data:/var/lib/postgresql/data
+      - ./seed/init-dw:/docker-entrypoint-initdb.d:ro
+      - ./seed:/seed:ro
+      - ./sql:/sql:ro
+      - ./dbt:/dbt:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DW_USER:-praktikum} -d nusamart_dw"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Apache Superset. Dipakai mulai Modul 9.
+  #
+  # Layanan ini berat di laptop kelas. Bila laboratorium terbatas, matikan saja
+  # sampai Modul 9:
+  #
+  #   docker compose up -d postgres_source postgres_dw
+  #
+  # Metadata Superset disimpan pada volume superset_home (SQLite bawaan), cukup
+  # untuk praktikum. Untuk instans bersama di server prodi, ganti dengan
+  # SQLALCHEMY_DATABASE_URI yang menunjuk PostgreSQL tersendiri.
+  # ---------------------------------------------------------------------------
+  superset:
+    image: apache/superset:4.1.1
+    container_name: pgd_superset
+    depends_on:
+      postgres_dw:
+        condition: service_healthy
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?SUPERSET_SECRET_KEY wajib diisi pada .env}
+      SUPERSET_LOAD_EXAMPLES: "no"
+      FLASK_APP: superset
+    ports:
+      - "8088:8088"
+    volumes:
+      - superset_home:/app/superset_home
+    # Bootstrap dijalankan setiap kali container menyala. Perintah create-admin
+    # gagal tanpa akibat bila admin sudah ada -- karena itu diakhiri "|| true".
+    command:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        superset db upgrade
+        superset fab create-admin \
+          --username "${SUPERSET_ADMIN:-admin}" \
+          --password "${SUPERSET_ADMIN_PASSWORD:-admin}" \
+          --firstname Admin --lastname Praktikum \
+          --email admin@praktikum.local || true
+        superset init
+        superset run -h 0.0.0.0 -p 8088 --with-threads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8088/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    restart: unless-stopped
+
+volumes:
+  source_data:
+  dw_data:
+  superset_home:

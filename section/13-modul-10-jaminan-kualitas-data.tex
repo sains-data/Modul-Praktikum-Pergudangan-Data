@@ -1,0 +1,766 @@
+\chapter{Jaminan Kualitas Data: Pengujian Otomatis dan Rekonsiliasi}
+\label{modul:jaminan-kualitas-data}
+
+\section{Identitas Modul}
+
+\begin{identitasmodul}
+\textbf{Sumber materi}    & Pertemuan 13 \\
+\textbf{CPMK}             & CPMK-102 \\
+\textbf{Minggu pelaksanaan} & Minggu ke-13, setelah kuliah Pertemuan 13 \\
+\textbf{Durasi tatap muka} & 120 menit \\
+\textbf{Estimasi tugas}   & 4--5 jam di luar sesi \\
+\textbf{Moda kerja}       & Individual \\
+\textbf{Perangkat}        & PostgreSQL 17 dan dbt Core \\
+\textbf{Dataset}          & Satu batch NusaMart yang memuat anomali terkendali \\
+\textbf{Skrip pendukung}  & \berkas{sql/modul-10/} beserta \berkas{dbt/modul-10/} \\
+\textbf{Luaran}           & Skrip profiling dan rekonsiliasi, minimal delapan uji data, serta laporan kualitas data per batch \\
+\end{identitasmodul}
+
+\slideref{13}
+
+\section{Capaian dan Indikator Keberhasilan}
+
+Mahasiswa mampu menerjemahkan aturan bisnis menjadi pemeriksaan kualitas yang
+terukur, mendeteksi anomali secara otomatis, menangani data gagal tanpa mengubah
+data mentah, dan membuktikan kesesuaian angka antara sumber dan warehouse.
+
+\begin{capaian}
+Pada akhir modul ini mahasiswa mampu:
+\begin{enumerate}[leftmargin=1.4em]
+  \item memprofilkan satu batch dan menemukan anomali yang belum diketahui
+        sebelumnya;
+  \item menerjemahkan aturan bisnis menjadi generic dan custom data test yang
+        dapat dijalankan otomatis;
+  \item menetapkan tingkat keparahan dan ambang setiap uji, serta menjelaskan
+        alasannya;
+  \item mengarantina baris yang gagal tanpa mengubah data mentah maupun
+        menghapusnya;
+  \item merekonsiliasi empat besaran antara sumber dan gudang, dan menjelaskan
+        setiap selisih yang muncul.
+\end{enumerate}
+\end{capaian}
+
+Sembilan modul sebelumnya mengandaikan angka yang dimuat adalah benar. Modul ini
+membalik andaian itu: data diperlakukan sebagai sesuatu yang harus
+\emph{dibuktikan} layak dipercaya, dan pembuktian itu harus dapat dijalankan
+ulang setiap kali data baru masuk.
+
+\section{Ruang Lingkup}
+
+Modul ini melanjutkan pengenalan generic data tests pada Modul 8. Fokusnya
+adalah perancangan aturan kualitas, custom test, threshold, karantina data
+gagal, serta rekonsiliasi jumlah baris dan control total per batch. Mahasiswa
+menilai completeness, uniqueness, validity, consistency, integrity, dan
+timeliness pada pipeline NusaMart.
+
+\section{Prasyarat dan Persiapan}
+
+\subsection{Prasyarat}
+
+\begin{itemize}
+  \item Proyek dbt yang berjalan dari Modul 8, termasuk empat generic test;
+  \item pipeline ETL dan tabel \perintah{audit\_muat} dari Modul 7;
+  \item koneksi \perintah{postgres\_fdw} ke ketiga sumber --- rekonsiliasi
+        lintas basis data baru mungkin sejak modul itu;
+  \item hasil profiling Modul 1, yang akan dibandingkan dengan profiling hari
+        ini;
+  \item pengertian baris unknown dan constraint dari Modul 5.
+\end{itemize}
+
+\subsection{Pre-lab}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Muat batch beranomali yang disediakan asisten:
+\begin{lstlisting}[style=shellgaya]
+docker compose exec -T postgres_source \
+  psql -U praktikum -d nusamart_oltp -f /seed/batch_anomali.sql
+\end{lstlisting}
+  \item Jalankan pipeline Modul 7 untuk batch tersebut, lalu \perintah{dbt build}.
+        Perhatikan: seluruhnya akan berjalan \textbf{tanpa galat}. Itulah
+        persoalannya.
+  \item Buka dashboard Modul 9 dan catat angka totalnya. Angka itu tampak
+        wajar --- dan sebagian di antaranya salah.
+  \item Siapkan jawaban berikut pada \berkas{modul-10-kualitas/pre-lab.md}:
+  \begin{enumerate}[label=\alph*.,leftmargin=1.4em]
+    \item Constraint basis data Modul 5 sudah menolak kuantitas tidak positif.
+          Sebutkan satu jenis kesalahan data yang \emph{tidak} dapat ditolak
+          oleh constraint mana pun.
+    \item Sebuah uji melaporkan 12 baris gagal dari 5 juta. Apakah pemuatan
+          harus dibatalkan? Apa yang menentukan jawabannya?
+    \item Bila ditemukan baris yang salah, mengapa memperbaikinya langsung di
+          basis data sumber adalah tindakan yang keliru?
+  \end{enumerate}
+\end{enumerate}
+
+\section{Konsep Dasar}
+
+\subsection{Enam Dimensi Kualitas Data}
+
+``Data berkualitas'' terlalu kabur untuk diuji. Ia harus dipecah menjadi
+dimensi yang masing-masing dapat diukur dengan satu angka
+\citep{batini2016, dama2017}.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.18\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.42\textwidth}@{}}
+\toprule
+\textbf{Dimensi} & \textbf{Pertanyaannya} & \textbf{Contoh ukuran pada NusaMart} \\
+\midrule
+Completeness & Adakah yang hilang? &
+  Persentase baris fakta yang menunjuk baris unknown \\
+Uniqueness & Adakah yang kembar? &
+  Jumlah \perintah{(toko, nomor\_struk)} yang muncul dua kali \\
+Validity & Sesuaikah bentuknya? &
+  Jumlah kuantitas yang tidak positif \\
+Consistency & Cocokkah antarbagian? &
+  Baris yang \perintah{subtotal}-nya tidak sama dengan hitungan \\
+Integrity & Utuhkah relasinya? &
+  Baris fakta yang produknya tidak ada di dimensi \\
+Timeliness & Cukup segarkah? &
+  Selisih hari antara transaksi dan pemuatannya \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatan}
+Perhatikan bahwa setiap ukuran berupa \emph{angka}, bukan pernyataan
+ya-atau-tidak. Angka memungkinkan penetapan ambang, perbandingan antarbatch,
+dan penilaian apakah keadaan membaik atau memburuk --- tiga hal yang tidak
+mungkin dilakukan dengan penilaian ``bagus'' atau ``jelek''.
+\end{catatan}
+
+\subsection{Profiling sebagai Penemuan}
+
+Profiling Modul 1 dikerjakan untuk \emph{memahami} sumber. Profiling di sini
+dikerjakan untuk \emph{menemukan} yang tidak diharapkan --- dan keduanya
+memakai pemeriksaan yang sama.
+
+Perbedaannya terletak pada pembanding. Sekarang Anda memiliki profil batch-batch
+sebelumnya, sehingga yang dicari bukan hanya nilai yang mustahil, melainkan
+juga nilai yang \emph{berubah tanpa sebab}.
+
+\begin{konsep}{Tiga jenis anomali}
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Mustahil} --- kuantitas negatif, tanggal di masa depan.
+        Ditemukan tanpa pembanding.
+  \item \textbf{Menyimpang} --- rata-rata harga naik sepuluh kali lipat dalam
+        semalam. Hanya ditemukan dengan membandingkan batch.
+  \item \textbf{Hilang} --- satu toko yang biasanya mengirim seribu transaksi
+        hari ini mengirim nol. Paling sulit ditemukan, karena
+        \emph{ketiadaan} tidak menghasilkan baris yang bisa diperiksa.
+\end{enumerate}
+\end{konsep}
+
+Jenis ketiga inilah alasan rekonsiliasi jumlah baris tidak dapat digantikan
+oleh uji apa pun atas isi tabel.
+
+\subsection{Generic Test, Custom Test, dan Ambang}
+
+Uji baku Modul 8 menangkap kerusakan struktural. Aturan bisnis memerlukan uji
+yang ditulis sendiri.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+\toprule
+\textbf{Jenis} & \textbf{Bentuknya} & \textbf{Contoh} \\
+\midrule
+Generic & Beberapa baris YAML &
+  \perintah{not\_null}, \perintah{unique}, \perintah{relationships} \\
+Singular & Satu berkas SQL yang mengembalikan baris gagal &
+  Satu produk tidak boleh punya dua versi aktif \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{konsep}{Uji singular pada dbt}
+Sebuah uji singular adalah query yang \textbf{mengembalikan baris yang
+melanggar aturan}. Uji dinyatakan lulus bila query itu tidak mengembalikan
+baris apa pun.
+
+Logika terbalik ini sering membingungkan pada awalnya: yang ditulis bukan
+``buktikan aturannya benar'', melainkan ``tunjukkan yang melanggarnya''.
+\end{konsep}
+
+Tidak semua kegagalan setara. dbt membedakan dua tingkat keparahan, dan
+pembedaan itu yang membuat pengujian dapat dipakai di lingkungan sebenarnya.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.44\textwidth}@{}}
+\toprule
+\textbf{Tingkat} & \textbf{Akibatnya} & \textbf{Dipakai untuk} \\
+\midrule
+\perintah{error} & Build berhenti &
+  Kerusakan yang membuat angka salah: kunci kembar, relasi putus \\
+\perintah{warn} & Build lanjut, dilaporkan &
+  Keadaan yang perlu diketahui tetapi tidak membatalkan: baris unknown
+  meningkat \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{peringatan}
+Menjadikan seluruh uji bertingkat \perintah{error} tampak paling aman, tetapi
+justru berbahaya. Pipeline yang berhenti setiap malam karena dua belas baris
+bermasalah akan segera dimatikan uji-nya oleh orang yang lelah dibangunkan ---
+dan sesudah itu tidak ada lagi yang memeriksa apa pun.
+
+Ambang yang dipilih harus dapat dijelaskan: mengapa 12 baris ditoleransi
+sedangkan 1.200 tidak.
+\end{peringatan}
+
+\subsection{Karantina Data Gagal}
+
+Ketika sebuah baris gagal uji, ada tiga pilihan, dan hanya satu yang benar.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.42\textwidth}@{}}
+\toprule
+\textbf{Pilihan} & \textbf{Akibatnya} & \textbf{Penilaian} \\
+\midrule
+Membuang & Baris hilang tanpa jejak &
+  Salah: total menyusut tanpa penjelasan \\
+Memperbaiki di sumber & Bukti asli lenyap &
+  Salah: sumber adalah catatan sistem lain, bukan milik gudang \\
+Mengarantina & Baris disimpan terpisah beserta alasannya &
+  Benar \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Karantina menyimpan baris gagal pada tabel tersendiri, lengkap dengan aturan
+yang dilanggarnya dan batch asalnya. Barisnya tidak masuk mart --- sehingga
+laporan tidak tercemar --- tetapi juga tidak hilang, sehingga jumlahnya dapat
+dihitung dan diperiksa manusia.
+
+\begin{catatan}
+Aturan ``data mentah tidak diubah'' sudah berlaku sejak Modul 5 sebagai kaidah
+reproduksibilitas. Di sini ia memperoleh alasan keduanya: bila data sumber
+diperbaiki, rekonsiliasi antara sumber dan gudang akan selalu cocok --- dan
+kecocokan yang diperoleh dengan cara itu tidak membuktikan apa pun.
+\end{catatan}
+
+\subsection{Rekonsiliasi Sumber dan Gudang}
+
+Rekonsiliasi menjawab satu pertanyaan: apakah yang ada di gudang sama dengan
+yang ada di sumber? Empat besaran diperiksa, dan keempatnya diperlukan.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.26\textwidth}>{\raggedright\arraybackslash}p{0.64\textwidth}@{}}
+\toprule
+\textbf{Besaran} & \textbf{Menangkap} \\
+\midrule
+Jumlah baris & Baris yang hilang atau kembar saat pemuatan \\
+Transaksi unik & Baris kembar yang tidak menambah jumlah baris karena
+  menggantikan yang lain \\
+Total kuantitas & Kesalahan pada kolom measure yang tidak mengubah jumlah
+  baris \\
+Total nilai penjualan & Kesalahan konversi satuan atau pembulatan \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Keempatnya diperlukan karena masing-masing buta terhadap yang lain. Jumlah baris
+yang cocok tidak menjamin nilainya cocok; nilai yang cocok tidak menjamin tidak
+ada baris yang tertukar.
+
+\begin{peringatan}
+Selisih rekonsiliasi \textbf{tidak harus nol}. Yang wajib adalah setiap selisih
+\emph{dapat dijelaskan} --- transaksi batal yang sengaja disaring, baris
+terkarantina, atau transaksi terlambat yang belum sampai. Selisih yang
+dijelaskan adalah temuan; selisih yang didiamkan adalah kegagalan.
+\end{peringatan}
+
+\section{Studi Kasus dan Protokol Praktikum}
+
+Batch yang dimuat pada pre-lab memuat sejumlah anomali yang ditanam sengaja.
+Pipeline memuatnya tanpa galat, dbt membangun tanpa galat, dan dashboard
+menampilkan angka yang tampak wajar --- karena tidak satu pun anomali itu
+melanggar constraint basis data.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}@{}}
+\toprule
+\textbf{Dimensi} & \textbf{Anomali yang ditanam} & \textbf{Mengapa lolos} \\
+\midrule
+Consistency & \perintah{subtotal} tidak sama dengan
+  kuantitas $\times$ harga $-$ diskon &
+  Ketiganya sendiri-sendiri masuk akal \\
+Uniqueness & Satu struk terkirim dua kali dari sumber berbeda &
+  Kunci gudang tetap unik \\
+Validity & Harga satuan seribu kali lipat &
+  Tetap bilangan positif \\
+Timeliness & Sebagian transaksi sampai sepuluh hari terlambat &
+  Tanggalnya sah \\
+Completeness & Satu toko tidak mengirim data sama sekali &
+  Ketiadaan tidak menghasilkan baris \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatanasisten}
+Daftar anomali di atas \emph{tidak} dibagikan ke mahasiswa. Menemukannya adalah
+pekerjaan Bagian A, dan daftar ini dipakai asisten untuk memeriksa berapa yang
+berhasil ditemukan.
+
+Anomali completeness --- satu toko yang tidak mengirim apa pun --- adalah yang
+paling jarang ditemukan mahasiswa, karena tidak ada baris yang bisa diperiksa.
+Bila sampai menit ke-60 belum ada yang menemukannya, beri petunjuk berupa
+pertanyaan: ``berapa toko yang mengirim data pada batch ini, dan berapa yang
+mengirim pada batch sebelumnya?''
+\end{catatanasisten}
+
+\section{Alur Praktikum 120 Menit}
+
+\begin{alurwaktu}
+0--15 & Demonstrasi dashboard dengan angka yang tampak wajar tetapi salah. \\
+15--95 & Kerja terbimbing: profiling, penyusunan uji, karantina, dan
+  rekonsiliasi. \\
+95--110 & Checkpoint otomatis dan pembacaan laporan kualitas. \\
+110--120 & Penjelasan tugas scorecard kualitas data. \\
+\end{alurwaktu}
+
+\section{Prosedur Praktikum Terbimbing}
+
+\subsection{Bagian A: Memprofilkan Batch Beranomali}
+
+\langkah{A.1 Menjalankan profiling}{15 menit}
+
+Jalankan \berkas{sql/modul-10/01-profiling.sql}, lalu bandingkan hasilnya
+dengan profil batch sebelumnya. Yang dicari bukan hanya nilai yang mustahil,
+melainkan juga nilai yang berubah tanpa sebab.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Perbandingan antarbatch: yang berubah drastis adalah calon anomali.
+SELECT batch_id,
+       COUNT(*)                                  AS baris,
+       COUNT(DISTINCT toko_id)                   AS toko_mengirim,
+       ROUND(AVG(harga_satuan), 2)               AS rata_harga,
+       ROUND(AVG(kuantitas), 3)                  AS rata_kuantitas,
+       MAX(waktu_transaksi)::DATE                AS transaksi_terbaru
+FROM   staging.penjualan_gabungan
+GROUP  BY batch_id
+ORDER  BY batch_id;
+\end{lstlisting}
+
+\langkah{A.2 Mencatat temuan}{10 menit}
+
+Temukan sekurang-kurangnya \textbf{lima} anomali. Untuk masing-masing, catat
+pada \berkas{temuan-anomali.md}: dimensi kualitas yang dilanggar, jumlah baris
+yang terpengaruh, dan query yang membuktikannya.
+
+\begin{catatan}
+Satu di antara anomali yang ditanam tidak dapat ditemukan dengan memeriksa isi
+tabel, karena barisnya memang tidak ada. Bila Anda hanya menemukan empat,
+tanyakan pada diri sendiri: apa yang \emph{seharusnya} ada tetapi tidak ada?
+\end{catatan}
+
+\subsection{Bagian B: Menerjemahkan Aturan Bisnis Menjadi Uji}
+
+\langkah{B.1 Menyusun daftar aturan}{10 menit}
+
+Sebelum menulis kode, lengkapi tabel aturan pada
+\berkas{aturan-kualitas.md}. Setiap baris memuat: aturan dalam bahasa bisnis,
+dimensi kualitas, cara mengukurnya, ambang, dan tingkat keparahan beserta
+alasannya.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.28\textwidth}p{0.14\textwidth}p{0.12\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}@{}}
+\toprule
+\textbf{Aturan} & \textbf{Dimensi} & \textbf{Tingkat} & \textbf{Alasan} \\
+\midrule
+Subtotal harus sama dengan hitungannya & Consistency & error &
+  Angka laporan langsung salah \\
+Satu produk hanya punya satu versi aktif & Uniqueness & error &
+  Join dimensi menggandakan fakta \\
+Baris unknown di bawah 5 persen & Completeness & warn &
+  \ldots \\
+\ldots & \ldots & \ldots & \ldots \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\langkah{B.2 Menulis empat generic test}{10 menit}
+
+Keempatnya sudah Anda kenal dari Modul 8. Tambahkan sekarang tingkat
+keparahannya.
+
+\begin{lstlisting}[style=yamlgaya]
+models:
+  - name: fct_penjualan
+    columns:
+      - name: produk_key
+        tests:
+          - not_null:
+              config:
+                severity: error
+          - relationships:
+              to: ref('dim_produk')
+              field: produk_key
+      - name: status_batch
+        tests:
+          - accepted_values:
+              values: ['lengkap', 'ada selisih', 'karantina']
+              config:
+                severity: warn
+\end{lstlisting}
+
+\langkah{B.3 Menulis empat custom test}{15 menit}
+
+Uji singular adalah query yang mengembalikan baris \emph{yang melanggar}
+aturan. Dua contoh disediakan pada \berkas{dbt/modul-10/tests/}; dua sisanya
+Anda tulis sendiri.
+
+\begin{lstlisting}[style=sqlgaya]
+-- tests/satu_versi_scd_aktif.sql
+-- Lulus bila query ini tidak mengembalikan baris apa pun.
+SELECT produk_id, COUNT(*) AS jumlah_versi_aktif
+FROM   {{ ref('dim_produk') }}
+WHERE  baris_kini
+GROUP  BY produk_id
+HAVING COUNT(*) > 1
+\end{lstlisting}
+
+\begin{lstlisting}[style=sqlgaya]
+-- tests/total_penjualan_konsisten.sql
+-- Total mart harus sama dengan total fakta. Selisih berarti mart belum
+-- disegarkan, atau agregasinya keliru.
+WITH fakta AS (SELECT SUM(subtotal) AS n FROM {{ ref('fct_penjualan') }}),
+     mart  AS (SELECT SUM(nilai_penjualan) AS n FROM {{ ref('agg_bulanan') }})
+SELECT fakta.n AS total_fakta, mart.n AS total_mart
+FROM   fakta, mart
+WHERE  ROUND(fakta.n, 2) <> ROUND(mart.n, 2)
+\end{lstlisting}
+
+Dua uji yang Anda tulis sendiri harus mencakup dimensi yang belum tersentuh ---
+misalnya \emph{consistency} untuk aritmetika subtotal, dan \emph{timeliness}
+untuk selisih hari antara transaksi dan pemuatannya.
+
+\begin{lstlisting}[style=shellgaya]
+dbt test --store-failures
+\end{lstlisting}
+
+\begin{catatan}
+Opsi \perintah{--store-failures} menyimpan baris yang gagal ke tabel
+tersendiri, bukan hanya menghitungnya. Tanpa itu, Anda tahu ada 12 baris salah
+tetapi tidak tahu baris yang mana --- dan tidak dapat memeriksanya.
+\end{catatan}
+
+\subsection{Bagian C: Mengarantina Data Gagal}
+
+\langkah{C.1 Membuat tabel karantina}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE gudang.karantina_penjualan (
+  karantina_id  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  batch_id      BIGINT      NOT NULL,
+  aturan        VARCHAR(60) NOT NULL,   -- aturan yang dilanggar
+  alasan        TEXT        NOT NULL,   -- keterangan bagi manusia
+  ditemukan     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ditinjau      BOOLEAN     NOT NULL DEFAULT FALSE,
+  baris_asli    JSONB       NOT NULL    -- salinan utuh baris sumber
+);
+\end{lstlisting}
+
+Kolom \perintah{baris\_asli} bertipe \perintah{JSONB} agar baris apa pun dapat
+disimpan tanpa menuntut struktur yang sama. Yang disimpan adalah salinan ---
+data sumber sendiri tidak disentuh.
+
+\langkah{C.2 Mengarantina dan memuat ulang}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+-- Sisihkan baris yang melanggar aritmetika subtotal.
+INSERT INTO gudang.karantina_penjualan (batch_id, aturan, alasan, baris_asli)
+SELECT batch_id,
+       'subtotal_konsisten',
+       format('subtotal %s, seharusnya %s',
+              subtotal, ROUND(kuantitas * harga_satuan - diskon, 2)),
+       to_jsonb(s)
+FROM   staging.penjualan_gabungan s
+WHERE  ROUND(kuantitas * harga_satuan - diskon, 2) <> ROUND(subtotal, 2);
+
+-- Muat ulang fakta, kecuali baris yang terkarantina.
+DELETE FROM gudang.fakta_penjualan WHERE batch_id = :batch;
+INSERT INTO gudang.fakta_penjualan (...)
+SELECT ... FROM staging.penjualan_gabungan s
+WHERE  s.batch_id = :batch
+  AND  NOT EXISTS (SELECT 1 FROM gudang.karantina_penjualan k
+                   WHERE k.batch_id = s.batch_id
+                     AND k.baris_asli->>'transaksi_id'
+                         = s.transaksi_id::TEXT);
+\end{lstlisting}
+
+Jumlah baris yang dikarantina menjadi salah satu penjelasan sah bagi selisih
+rekonsiliasi pada Bagian D.
+
+\subsection{Bagian D: Merekonsiliasi Sumber dan Gudang}
+
+\langkah{D.1 Membandingkan empat besaran}{15 menit}
+
+Rekonsiliasi lintas basis data kini mungkin berkat \perintah{postgres\_fdw}
+yang Anda pasang pada Modul 7. Jalankan
+\berkas{sql/modul-10/02-reconciliation.sql}.
+
+\begin{lstlisting}[style=sqlgaya]
+WITH sumber AS (
+  SELECT COUNT(*)                       AS baris,
+         COUNT(DISTINCT t.transaksi_id) AS transaksi_unik,
+         SUM(ti.kuantitas)              AS kuantitas,
+         SUM(ti.subtotal)               AS nilai
+  FROM   src_oltp.transaksi_item ti
+  JOIN   src_oltp.transaksi t ON t.transaksi_id = ti.transaksi_id
+  WHERE  t.status <> 'BATAL'
+    AND  t.waktu_transaksi::DATE = :tanggal_batch
+),
+gudang AS (
+  SELECT COUNT(*)                     AS baris,
+         COUNT(DISTINCT transaksi_id) AS transaksi_unik,
+         SUM(kuantitas)               AS kuantitas,
+         SUM(subtotal)                AS nilai
+  FROM   gudang.fakta_penjualan
+  WHERE  tanggal_key = :tanggal_key
+)
+SELECT 'baris'          AS besaran, s.baris,          g.baris,
+       s.baris - g.baris                   AS selisih FROM sumber s, gudang g
+UNION ALL
+SELECT 'transaksi_unik', s.transaksi_unik, g.transaksi_unik,
+       s.transaksi_unik - g.transaksi_unik FROM sumber s, gudang g
+UNION ALL
+SELECT 'kuantitas',      s.kuantitas,      g.kuantitas,
+       s.kuantitas - g.kuantitas           FROM sumber s, gudang g
+UNION ALL
+SELECT 'nilai',          s.nilai,          g.nilai,
+       s.nilai - g.nilai                   FROM sumber s, gudang g;
+\end{lstlisting}
+
+\langkah{D.2 Menjelaskan setiap selisih}{10 menit}
+
+Untuk setiap selisih yang bukan nol, lengkapi tabel penjelasan pada
+\berkas{laporan-kualitas.md}. Setiap baris harus menyebut penyebab dan
+angkanya, dan jumlah seluruh penjelasan harus sama dengan selisihnya.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}r>{\raggedright\arraybackslash}p{0.48\textwidth}@{}}
+\toprule
+\textbf{Besaran} & \textbf{Selisih} & \textbf{Penjelasan} \\
+\midrule
+Baris & 47 & 39 baris terkarantina, 8 transaksi terlambat belum masuk \\
+Nilai & \ldots & \ldots \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{peringatan}
+Selisih yang ``kira-kira sesuai'' tidak memenuhi syarat. Bila 47 baris tidak
+cocok dan penjelasan Anda hanya mencakup 39, sisanya adalah kegagalan yang
+belum ditemukan --- bukan pembulatan.
+\end{peringatan}
+
+\subsection{Bagian E: Menyusun Laporan Kualitas per Batch}
+
+\langkah{E.1 Merangkum hasil}{10 menit}
+
+Susun \berkas{laporan-kualitas.md} yang memuat, untuk batch ini: nilai keenam
+dimensi kualitas beserta ambangnya, hasil seluruh uji, jumlah baris
+terkarantina menurut aturan, dan tabel rekonsiliasi beserta penjelasannya.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Scorecard satu batch, siap disalin ke laporan.
+SELECT 'completeness' AS dimensi,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE produk_key = -1)
+             / NULLIF(COUNT(*), 0), 3) AS nilai_persen,
+       5.0 AS ambang_persen
+FROM   gudang.fakta_penjualan
+UNION ALL
+SELECT 'consistency',
+       ROUND(100.0 * COUNT(*) FILTER (
+             WHERE ROUND(kuantitas * harga_satuan - diskon, 2)
+                   <> ROUND(subtotal, 2)) / NULLIF(COUNT(*), 0), 3),
+       0.0
+FROM   gudang.fakta_penjualan;
+\end{lstlisting}
+
+\begin{luaran}
+\berkas{modul-10-kualitas/temuan-anomali.md},
+\berkas{aturan-kualitas.md}, proyek dbt berisi minimal delapan uji,
+\berkas{ddl-karantina.sql}, dan \berkas{laporan-kualitas.md} beserta tabel
+rekonsiliasi.
+\end{luaran}
+
+\begin{checkpoint}
+Asisten menjalankan \berkas{sql/modul-10/check.sql} dan memeriksa butir berikut:
+\begin{ceklis}
+  \item seluruh anomali yang ditanam terdeteksi dan tercatat pada
+        \berkas{temuan-anomali.md};
+  \item sekurang-kurangnya delapan uji terpasang --- empat generic dan empat
+        custom --- masing-masing dengan tingkat keparahan yang beralasan;
+  \item seluruh uji bertingkat \perintah{error} lulus setelah remediasi;
+  \item tabel karantina ada dan terisi, beserta aturan dan alasan setiap baris;
+  \item keempat besaran rekonsiliasi diperiksa, dan setiap selisih dijelaskan
+        sampai jumlahnya tepat;
+  \item \textbf{data mentah tidak diubah} --- anomali bawaan masih utuh pada
+        basis data sumber;
+  \item laporan kualitas memuat keenam dimensi beserta ambangnya.
+\end{ceklis}
+\end{checkpoint}
+
+\section{Latihan Mandiri di Kelas}
+
+\latihan{Menakar ambang yang tepat}
+
+Uji \emph{completeness} Anda melaporkan 3,2 persen baris fakta menunjuk baris
+unknown.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Pada ambang berapa Anda akan menghentikan pemuatan? Nyatakan alasannya
+        dalam istilah dampak bisnis, bukan istilah teknis.
+  \item Bila ambang ditetapkan 1 persen, berapa kali pipeline akan berhenti
+        selama sebulan terakhir? Periksa dengan data batch yang ada.
+  \item Apa yang terjadi pada disiplin tim bila pipeline berhenti terlalu
+        sering? Kaitkan dengan pilihan antara \perintah{error} dan
+        \perintah{warn}.
+\end{enumerate}
+
+\latihan{Membuat uji yang lolos padahal data salah}
+
+Tulis satu uji yang \emph{lulus} untuk batch beranomali ini, padahal datanya
+jelas bermasalah.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Tunjukkan ujinya dan jelaskan mengapa ia lolos.
+  \item Anomali mana yang luput darinya?
+  \item Perbaiki ujinya sehingga anomali itu tertangkap.
+  \item Pelajaran apa yang Anda tarik tentang uji yang selalu lulus?
+\end{enumerate}
+
+\section{Tugas Individu}
+
+\subsection{Pekerjaan Wajib}
+
+Mahasiswa menyusun scorecard kualitas untuk proses bisnis kedua, menetapkan
+threshold beserta alasannya, dan membandingkan hasil pengukuran pada dua batch.
+
+Kumpulkan \berkas{scorecard-kualitas.md} yang memuat:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item proses bisnis kedua yang dipilih --- persediaan, promosi, atau retur;
+  \item keenam dimensi kualitas beserta cara mengukurnya pada proses tersebut,
+        lengkap dengan query masing-masing;
+  \item ambang setiap dimensi beserta alasannya dalam istilah dampak bisnis,
+        dan tingkat keparahan yang dipilih;
+  \item hasil pengukuran pada \textbf{dua} batch berbeda, disandingkan dalam
+        satu tabel;
+  \item penilaian apakah keadaan membaik atau memburuk, beserta satu tindakan
+        yang Anda usulkan.
+\end{enumerate}
+
+\begin{catatan}
+Butir keempat adalah alasan scorecard dibuat. Satu batch hanya memberi potret;
+dua batch memberi arah. Sebagian besar keputusan kualitas data diambil
+berdasarkan arah, bukan potret --- ``tiga persen'' tidak berarti apa-apa
+sampai diketahui bulan lalu berapa.
+\end{catatan}
+
+\subsection{Pertanyaan Analisis}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Anomali yang paling sulit Anda temukan adalah toko yang tidak mengirim
+        data sama sekali. Jelaskan mengapa jenis kesalahan ini luput dari
+        seluruh uji atas isi tabel, dan rancang satu pemeriksaan yang akan
+        menangkapnya secara otomatis pada batch berikutnya.
+  \item Seorang rekan mengusulkan memperbaiki 39 baris bermasalah langsung di
+        basis data sumber agar rekonsiliasi cocok sempurna. Uraikan apa yang
+        hilang bila usulan itu dijalankan, dan sebutkan pihak mana yang
+        seharusnya berwenang memperbaiki data sumber.
+  \item Seluruh uji Anda lulus pada batch berikutnya. Sebutkan dua sebab yang
+        mungkin selain ``datanya memang bersih'', dan pemeriksaan apa yang akan
+        Anda lakukan untuk memastikannya.
+\end{enumerate}
+
+\section{Format Pengumpulan dan Checklist}
+
+Kumpulkan skrip profiling dan rekonsiliasi, proyek dbt berisi seluruh uji, DDL
+karantina, dan laporan kualitas per batch.
+
+Seluruh berkas diletakkan pada \berkas{modul-10-kualitas/}.
+
+\begin{ceklis}
+  \item \berkas{pre-lab.md}
+  \item \berkas{temuan-anomali.md} --- lima anomali beserta bukti angka
+  \item \berkas{aturan-kualitas.md} --- aturan, dimensi, ambang, keparahan,
+        alasan
+  \item Proyek dbt berisi minimal delapan uji
+  \item \berkas{ddl-karantina.sql} dan isi tabel karantina
+  \item \berkas{laporan-kualitas.md} --- scorecard dan tabel rekonsiliasi
+  \item \berkas{scorecard-kualitas.md} --- proses bisnis kedua, dua batch
+  \item \berkas{jawaban-analisis.md}
+  \item Bukti bahwa data sumber tidak berubah
+\end{ceklis}
+
+\section{Troubleshooting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Masalah yang lazim muncul pada Modul 10 dan penanganannya}
+\label{tab:m10-troubleshooting}
+\begin{tabular}{@{}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.62\textwidth}@{}}
+\toprule
+\textbf{Gejala} & \textbf{Penanganan} \\
+\midrule
+Seluruh uji lulus pada batch beranomali &
+  Uji terlalu longgar, atau menguji hal yang memang tidak dilanggar. Bandingkan
+  daftar uji Anda dengan keenam dimensi --- biasanya ada dimensi yang belum
+  tersentuh sama sekali. \\
+Uji singular selalu gagal padahal data benar &
+  Logikanya terbalik. Uji singular mengembalikan baris yang \emph{melanggar};
+  bila query Anda mengembalikan baris yang benar, ia akan selalu gagal. \\
+\perintah{dbt test} melaporkan kegagalan tanpa menyebut barisnya &
+  Jalankan dengan \perintah{--store-failures}, lalu periksa tabel hasilnya. \\
+Rekonsiliasi selisihnya nol padahal ada anomali &
+  Anomali yang ditanam tidak mengubah jumlah maupun total --- misalnya baris
+  yang tertukar. Karena itu keempat besaran diperiksa, bukan satu. \\
+Selisih rekonsiliasi tidak dapat dijelaskan seluruhnya &
+  Periksa berurutan: baris terkarantina, transaksi batal, transaksi terlambat,
+  lalu baris yang menunjuk unknown. \\
+Rekonsiliasi lambat sekali &
+  Query menempuh \perintah{postgres\_fdw} dan tidak seluruh agregasi dapat
+  didorong ke sisi seberang. Batasi pada satu tanggal batch, jangan seluruh
+  riwayat. \\
+Jumlah baris karantina bertambah setiap pemuatan diulang &
+  Penyisihan tidak idempoten. Hapus baris karantina batch itu lebih dahulu,
+  sebagaimana pola hapus-lalu-muat Modul 7. \\
+Anomali bawaan hilang dari sumber &
+  Seseorang memperbaikinya langsung di sumber. Ini melanggar aturan modul;
+  pulihkan sumber dari seed, lalu ulangi dari Bagian A. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ringkasan}
+
+Modul ini menutup rangkaian sepuluh modul dengan membalik andaian yang berlaku
+sejak awal: data tidak dianggap benar sampai dibuktikan. Pembuktian itu berupa
+angka, dijalankan otomatis, dan diulang setiap kali data baru masuk.
+
+Tiga gagasan menutup praktikum ini. \emph{Pertama}, ``berkualitas'' harus
+dipecah menjadi dimensi yang masing-masing terukur --- karena hanya angka yang
+memungkinkan penetapan ambang, perbandingan antarbatch, dan penilaian arah.
+\emph{Kedua}, kesalahan yang paling berbahaya adalah yang tidak melanggar satu
+constraint pun: subtotal yang tidak konsisten, harga yang seribu kali lipat,
+dan toko yang diam. Ketiganya lolos sampai ke dashboard tanpa satu pun galat.
+\emph{Ketiga}, data mentah tidak diubah --- baris gagal dikarantina, bukan
+dibuang atau diperbaiki di sumber, karena rekonsiliasi yang cocok akibat sumber
+yang disunting tidak membuktikan apa pun.
+
+Sepuluh modul ini membangun satu gudang data secara berlapis: dari membaca
+sumber pada Modul 1, sampai membuktikan bahwa angkanya layak dipercaya hari
+ini. Proyek akhir pada minggu 14 dan 15 mematangkan apa yang sudah ada ---
+menerapkannya pada proses bisnis kedua, melengkapinya dengan runbook
+operasional, dan membuktikan satu siklus muat berulang yang idempoten.

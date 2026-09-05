@@ -1,0 +1,721 @@
+\chapter{Optimisasi Query Analitik}
+\label{modul:optimisasi-query-analitik}
+
+\section{Identitas Modul}
+
+\begin{identitasmodul}
+\textbf{Sumber materi}    & Pertemuan 7 \\
+\textbf{CPMK}             & CPMK-092 \\
+\textbf{Minggu pelaksanaan} & Minggu ke-9, setelah UTS \\
+\textbf{Durasi tatap muka} & 120 menit \\
+\textbf{Estimasi tugas}   & 4--5 jam di luar sesi \\
+\textbf{Moda kerja}       & Individual \\
+\textbf{Perangkat}        & PostgreSQL 17 dan DBeaver \\
+\textbf{Dataset}          & NusaMart ukuran \textbf{sedang} dan Northwind sebagai pembanding \\
+\textbf{Skrip pendukung}  & \berkas{sql/modul-06/} beserta \berkas{check.sql} \\
+\textbf{Luaran}           & \berkas{catatan-optimisasi.md} \\
+\end{identitasmodul}
+
+\slideref{7}
+
+\section{Capaian dan Indikator Keberhasilan}
+
+Mahasiswa mampu membuktikan dampak partitioning, aggregate table, dan
+materialized view menggunakan execution plan serta statistik buffer.
+Keberhasilan bukan sekadar query lebih cepat, tetapi adanya bukti mekanisme
+yang membuat perubahan tersebut bekerja.
+
+\begin{capaian}
+Pada akhir modul ini mahasiswa mampu:
+\begin{enumerate}[leftmargin=1.4em]
+  \item menetapkan \istilah{baseline} pengukuran yang adil sebelum melakukan
+        optimisasi apa pun;
+  \item memartisi tabel fakta menurut rentang bulan dan \textbf{membuktikan}
+        terjadinya \istilah{partition pruning} dari keluaran
+        \perintah{EXPLAIN};
+  \item menjelaskan mengapa pruning gagal terjadi ketika penyaringan hanya
+        dilakukan lewat tabel dimensi;
+  \item membandingkan \istilah{aggregate table} dan \istilah{materialized view}
+        untuk pertanyaan yang sama, dalam satuan ruang, waktu penyegaran, dan
+        halaman yang dibaca;
+  \item menyatakan hasil optimisasi dalam satuan halaman, bukan hanya detik,
+        serta menjelaskan pengaruh cache pada pengukuran.
+\end{enumerate}
+\end{capaian}
+
+Kaidah modul ini satu kalimat: \textbf{setiap tindakan optimisasi membeli
+sesuatu, dan setiap pembelian ada harganya}. Jawaban ``lebih cepat'' tanpa
+menyebut apa yang dibayar --- ruang, waktu pemuatan, atau kesegaran data ---
+tidak memperoleh nilai penuh.
+
+\section{Prasyarat dan Persiapan}
+
+\subsection{Prasyarat}
+
+\begin{itemize}
+  \item Kemampuan membaca \perintah{EXPLAIN (ANALYZE, BUFFERS)} dari Modul 5,
+        termasuk \perintah{shared hit} dan \perintah{shared read};
+  \item pengertian page 8 KB, lebar baris, dan hubungan keduanya dengan jumlah
+        halaman yang harus dibaca;
+  \item pengertian indeks B-tree beserta pengaruh urutan kolomnya;
+  \item skema \perintah{gudang} hasil Modul 5, lengkap dengan baris unknown dan
+        constraint.
+\end{itemize}
+
+\subsection{Pre-lab}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Beralih ke dataset ukuran sedang.} Ini wajib, bukan pilihan.
+        Pada 100 ribu baris, sequential scan memang menang dan seluruh
+        pengukuran modul ini tidak akan memperlihatkan apa pun.
+
+        Bangkitkan ulang sumber pada ukuran sedang, lalu jalankan kembali
+        skrip pemuatan Anda sendiri dari Modul 2 sampai 5.
+\begin{lstlisting}[style=shellgaya]
+python seed/generate_nusamart.py --ukuran sedang --seed 42
+
+# lalu jalankan berurutan skrip pemuatan Anda sendiri:
+#   modul-02-star-schema/ddl.sql, load.sql
+#   modul-03-scd2/ddl-scd2.sql, load-scd2.sql
+#   modul-05-fisikal/ddl-fisikal.sql
+\end{lstlisting}
+
+        Inilah ujian pertama atas kaidah reproduksibilitas Modul 5: skrip yang
+        benar-benar dapat dijalankan ulang dari awal akan menyelesaikan langkah
+        ini tanpa penyuntingan manual. Bila skrip Anda menuntut perbaikan di
+        sana-sini, catat apa saja yang perlu diubah --- itu temuan yang layak
+        dilaporkan.
+
+        Bila waktu tidak mencukupi, pulihkan
+        \berkas{snapshot-modul-05-sedang.sql} yang disediakan asisten.
+  \item Pulihkan basis data Northwind sebagai pembanding pada Bagian D:
+\begin{lstlisting}[style=shellgaya]
+./seed/unduh-northwind.sh
+\end{lstlisting}
+  \item Jalankan \perintah{ANALYZE} pada seluruh schema \perintah{gudang}.
+        Statistik dari dataset kecil tidak berlaku untuk dataset sedang, dan
+        perencana yang memakai statistik usang akan memilih rencana yang keliru.
+  \item Catat ukuran awal pada \berkas{modul-06-optimisasi/baseline.md}:
+\begin{lstlisting}[style=sqlgaya]
+SELECT COUNT(*) AS jumlah_baris,
+       pg_size_pretty(pg_relation_size('gudang.fakta_penjualan')) AS heap,
+       pg_size_pretty(pg_indexes_size('gudang.fakta_penjualan'))  AS indeks
+FROM   gudang.fakta_penjualan;
+\end{lstlisting}
+  \item Siapkan jawaban berikut pada \berkas{pre-lab.md}:
+  \begin{enumerate}[label=\alph*.,leftmargin=1.4em]
+    \item Tabel fakta Anda kini berisi sekitar lima juta baris. Dengan lebar
+          baris hasil hitungan Modul 5, berapa halaman yang harus dibaca oleh
+          satu sequential scan penuh?
+    \item Bila sebuah query hanya memerlukan data satu bulan, berapa bagian
+          dari halaman itu yang sebenarnya sia-sia dibaca?
+    \item Menurut Anda, apa yang dibeli oleh partisi, dan apa yang dibayar?
+  \end{enumerate}
+\end{enumerate}
+
+\section{Konsep Dasar}
+
+\subsection{Partitioning dan Partition Pruning}
+
+Partisi memecah satu tabel besar menjadi beberapa tabel fisik yang lebih kecil,
+sementara bagi query ia tetap tampak sebagai satu tabel. Yang dibeli bukan
+kecepatan membaca per halaman, melainkan \emph{kesempatan untuk tidak membaca
+sama sekali}.
+
+\begin{konsep}{Partition pruning}
+Ketika perencana dapat membuktikan bahwa sebuah partisi mustahil memuat baris
+yang dicari, partisi itu tidak dibaca sama sekali. Inilah \istilah{pruning}.
+
+Query yang meminta data Januari pada tabel berpartisi bulanan selama tiga
+tahun hanya menyentuh 1 dari 36 partisi --- membaca sekitar tiga persen
+halaman dibandingkan sequential scan penuh.
+\end{konsep}
+
+Syaratnya satu, dan justru di sinilah kebanyakan kegagalan terjadi:
+\textbf{penyaringan harus menyentuh kolom kunci partisi}. Perencana melakukan
+pruning dengan membandingkan predikat query terhadap batas setiap partisi. Bila
+predikatnya berada pada tabel lain --- misalnya
+\perintah{dim\_tanggal.tanggal} --- perencana tidak memiliki dasar untuk
+membuang partisi mana pun pada saat menyusun rencana.
+
+\begin{peringatan}
+Inilah kesalahan paling lazim pada partisi gudang data. Query yang menyaring
+lewat \perintah{JOIN} ke dimensi tanggal tampak benar dan menghasilkan angka
+yang benar, tetapi tetap membaca seluruh partisi. Penyelesaiannya bukan
+membatalkan partisi, melainkan \emph{menambahkan} predikat atas kolom kunci
+partisi, sehingga perencana memperoleh dasar untuk memangkas.
+\end{peringatan}
+
+Kunci partisi yang dipakai modul ini adalah \perintah{tanggal\_key}. Bentuk
+\perintah{YYYYMMDD} yang dipilih pada Modul 2 kini terbayar: ia bilangan bulat,
+sehingga batas partisi dapat dinyatakan sebagai rentang bilangan yang terbaca
+manusia.
+
+\subsection{Aggregate Table}
+
+\istilah{Aggregate table} adalah tabel biasa berisi hasil agregasi yang sudah
+dihitung sebelumnya. Query yang semula membaca lima juta baris fakta cukup
+membaca beberapa ribu baris agregat.
+
+Yang dibeli jelas. Yang dibayar ada tiga: ruang tambahan, waktu pemuatan
+tambahan, dan --- yang paling sering dilupakan --- \textbf{kewajiban menjaga
+agar isinya tetap sesuai dengan fakta}. Agregat yang tidak disegarkan setelah
+fakta berubah adalah sumber angka salah yang paling sulit dilacak.
+
+Keunggulan utamanya: penyegaran dapat dilakukan \emph{sebagian}. Bila hanya
+data kemarin yang berubah, cukup hapus dan hitung ulang baris agregat untuk
+kemarin.
+
+\subsection{Materialized View}
+
+\istilah{Materialized view} menyimpan hasil sebuah query sebagai data nyata di
+disk, tetapi definisinya dikelola PostgreSQL. Kodenya jauh lebih ringkas
+daripada aggregate table --- satu pernyataan \perintah{CREATE}, satu perintah
+\perintah{REFRESH}.
+
+Harganya terletak pada cara penyegarannya. \perintah{REFRESH MATERIALIZED VIEW}
+menghitung ulang \emph{seluruh} isinya, betapa pun kecil bagian data yang
+berubah. Pada tabel yang terus tumbuh, biaya penyegaran tumbuh bersamanya.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Aspek} & \textbf{Aggregate table} & \textbf{Materialized view} \\
+\midrule
+Banyaknya kode & Lebih banyak, ditulis sendiri & Sedikit, dikelola PostgreSQL \\
+Penyegaran & Dapat sebagian & Selalu seluruhnya \\
+Biaya penyegaran & Sebanding data yang berubah & Sebanding seluruh data \\
+Penguncian saat segar & Dapat diatur sendiri & Mengunci, kecuali
+  \perintah{CONCURRENTLY} \\
+Risiko & Lupa menyegarkan & Penyegaran menjadi mahal seiring waktu \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatan}
+\perintah{REFRESH MATERIALIZED VIEW CONCURRENTLY} tidak mengunci pembaca,
+tetapi memerlukan satu indeks \perintah{UNIQUE} pada view dan justru lebih
+lambat daripada penyegaran biasa. Ia menukar waktu dengan ketersediaan ---
+pertukaran yang masuk akal pada sistem yang dipakai sepanjang hari, dan tidak
+masuk akal pada gudang data yang disegarkan tengah malam.
+\end{catatan}
+
+\subsection{Buffer, Cache, dan Pengukuran yang Adil}
+
+Pengukuran yang tidak adil menghasilkan kesimpulan yang salah. Tiga sumber
+ketidakadilan yang paling sering muncul:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Cache.} Eksekusi kedua atas query yang sama membaca dari
+        memori. Waktunya bisa sepuluh kali lebih cepat tanpa satu pun
+        perubahan pada rancangan.
+  \item \textbf{Statistik usang.} Perencana yang tidak tahu tabelnya sudah
+        membesar akan memilih rencana untuk tabel kecil.
+  \item \textbf{Beban lain.} Laptop yang sedang menjalankan hal lain
+        menghasilkan waktu yang berubah-ubah.
+\end{enumerate}
+
+\begin{konsep}{Ukuran yang tahan terhadap ketiganya}
+Jumlah halaman yang disentuh --- \perintah{shared hit} ditambah
+\perintah{shared read} --- tidak berubah oleh keadaan cache maupun beban
+laptop. Angka inilah yang dipakai untuk membandingkan dua rancangan.
+
+\perintah{shared read} sendiri menyatakan berapa halaman yang benar-benar
+diambil dari disk, dan angka itu memang berubah menurut cache. Catat keduanya,
+tetapi \emph{bandingkan} jumlahnya.
+\end{konsep}
+
+Protokol pengukuran yang dipakai modul ini: jalankan setiap query
+\textbf{tiga kali}, catat eksekusi pertama dan ketiga, lalu bandingkan
+berdasarkan total halaman.
+
+\section{Studi Kasus dan Protokol Praktikum}
+
+Empat tindakan optimisasi diuji terhadap pertanyaan analitik yang tetap.
+Dataset sedang wajib digunakan agar biaya scan dan pruning terlihat.
+
+Satu pertanyaan dipakai sepanjang Bagian A sampai C, sehingga keempat tindakan
+dapat dibandingkan secara setara:
+
+\begin{quote}
+\emph{Berapa nilai penjualan per kategori produk per bulan di Provinsi Lampung
+sepanjang paruh pertama 2024?}
+\end{quote}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.06\textwidth}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.54\textwidth}@{}}
+\toprule
+\textbf{No} & \textbf{Tindakan} & \textbf{Yang hendak dibuktikan} \\
+\midrule
+1 & Partisi bulanan & Pruning membuang partisi di luar rentang \\
+2 & Indeks pada tabel terpartisi & Penyempitan lebih lanjut di dalam partisi \\
+3 & Aggregate table & Membaca ribuan baris, bukan jutaan \\
+4 & Materialized view & Hasil setara, dengan biaya penyegaran berbeda \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatanasisten}
+Pemuatan dataset sedang memakan waktu beberapa menit dan harus sudah selesai
+sebelum sesi. Pastikan mahasiswa menjalankannya sebagai pre-lab, dan sediakan
+\berkas{snapshot-modul-05-sedang.sql} bagi yang gagal. Sesi 120 menit tidak
+cukup bila pemuatan lima juta baris dilakukan di kelas.
+\end{catatanasisten}
+
+\section{Alur Praktikum 120 Menit}
+
+\begin{alurwaktu}
+0--15 & Demonstrasi baseline dan cara membaca buffer. \\
+15--95 & Kerja terbimbing: partisi, agregat, materialized view, dan Northwind. \\
+95--110 & Checkpoint bukti pruning serta tabel sebelum--sesudah. \\
+110--120 & Penjelasan analisis biaya penyegaran dan ruang. \\
+\end{alurwaktu}
+
+\section{Prosedur Praktikum Terbimbing}
+
+\subsection{Bagian A: Menetapkan Baseline}
+
+\langkah{A.1 Mengukur keadaan awal}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT dp.kategori, dt.tahun_bulan, SUM(f.subtotal) AS nilai_penjualan
+FROM   gudang.fakta_penjualan f
+JOIN   gudang.dim_tanggal dt  ON dt.tanggal_key = f.tanggal_key
+JOIN   gudang.dim_produk  dp  ON dp.produk_key  = f.produk_key
+JOIN   gudang.dim_toko    dtk ON dtk.toko_key   = f.toko_key
+WHERE  dtk.provinsi = 'Lampung'
+  AND  dt.tanggal BETWEEN DATE '2024-01-01' AND DATE '2024-06-30'
+GROUP  BY 1, 2;
+\end{lstlisting}
+
+Jalankan tiga kali. Catat pada \berkas{catatan-optimisasi.md}: jenis scan,
+\perintah{shared hit}, \perintah{shared read}, jumlahnya, serta waktu eksekusi
+pertama dan ketiga.
+
+\begin{catatan}
+Perhatikan selisih waktu antara eksekusi pertama dan ketiga, lalu perhatikan
+bahwa jumlah halaman hampir tidak berubah. Inilah bukti langsung mengapa waktu
+bukan ukuran yang dapat dipercaya untuk membandingkan rancangan --- dan
+mengapa seluruh perbandingan pada modul ini memakai halaman.
+\end{catatan}
+
+\subsection{Bagian B: Menerapkan Partisi Bulanan}
+
+\langkah{B.1 Membangun tabel berpartisi}{15 menit}
+
+Tabel yang sudah ada tidak dapat diubah menjadi tabel berpartisi. Yang
+dilakukan adalah membuat tabel berpartisi baru, memindahkan datanya, lalu
+menukar namanya. Skrip \berkas{sql/modul-06/\allowbreak 01-partisi.sql}
+mengerjakan langkah ini beserta pembangkitan partisi bulanan.
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE gudang.fakta_penjualan_p (
+  LIKE gudang.fakta_penjualan INCLUDING DEFAULTS
+) PARTITION BY RANGE (tanggal_key);
+
+-- Satu partisi per bulan, batas dinyatakan sebagai rentang YYYYMMDD.
+CREATE TABLE gudang.fakta_penjualan_2024_01
+  PARTITION OF gudang.fakta_penjualan_p
+  FOR VALUES FROM (20240101) TO (20240201);
+-- ... dan seterusnya
+
+-- Partisi penampung untuk nilai di luar rentang mana pun.
+CREATE TABLE gudang.fakta_penjualan_lain
+  PARTITION OF gudang.fakta_penjualan_p DEFAULT;
+\end{lstlisting}
+
+\begin{peringatan}
+Partisi \perintah{DEFAULT} wajib ada, dan alasannya berasal dari Modul 5:
+baris fakta yang tanggalnya tidak diketahui menunjuk
+\perintah{tanggal\_key = -1}, dan nilai itu tidak masuk rentang bulan mana
+pun. Tanpa partisi penampung, pemindahan data akan gagal dengan pesan
+\emph{no partition of relation found for row}.
+
+Periksa isinya setelah pemindahan. Partisi \perintah{DEFAULT} yang berisi
+banyak baris adalah tanda bahwa ada rentang tanggal yang belum Anda buatkan
+partisinya.
+\end{peringatan}
+
+\langkah{B.2 Membuktikan pruning gagal}{10 menit}
+
+Jalankan kembali query baseline apa adanya pada tabel berpartisi. Perhatikan
+bahwa seluruh partisi tetap dibaca.
+
+\begin{lstlisting}[style=sqlgaya]
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT dp.kategori, dt.tahun_bulan, SUM(f.subtotal)
+FROM   gudang.fakta_penjualan f          -- kini berpartisi
+JOIN   gudang.dim_tanggal dt ON dt.tanggal_key = f.tanggal_key
+JOIN   gudang.dim_produk  dp ON dp.produk_key  = f.produk_key
+JOIN   gudang.dim_toko   dtk ON dtk.toko_key   = f.toko_key
+WHERE  dtk.provinsi = 'Lampung'
+  AND  dt.tanggal BETWEEN DATE '2024-01-01' AND DATE '2024-06-30'
+GROUP  BY 1, 2;
+\end{lstlisting}
+
+Hitung berapa simpul \perintah{Seq Scan} yang muncul pada rencana. Bila
+jumlahnya sama dengan jumlah partisi, pruning tidak terjadi --- penyaringan
+tanggal berada pada \perintah{dim\_tanggal}, bukan pada kunci partisi.
+
+\langkah{B.3 Membuktikan pruning berhasil}{10 menit}
+
+Tambahkan satu predikat atas kunci partisi. Predikat ini tidak mengubah hasil
+sama sekali; ia hanya memberi perencana dasar untuk memangkas.
+
+\begin{lstlisting}[style=sqlgaya]
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT dp.kategori, dt.tahun_bulan, SUM(f.subtotal)
+FROM   gudang.fakta_penjualan f
+JOIN   gudang.dim_tanggal dt ON dt.tanggal_key = f.tanggal_key
+JOIN   gudang.dim_produk  dp ON dp.produk_key  = f.produk_key
+JOIN   gudang.dim_toko   dtk ON dtk.toko_key   = f.toko_key
+WHERE  dtk.provinsi = 'Lampung'
+  AND  f.tanggal_key BETWEEN 20240101 AND 20240630   -- kunci partisi
+  AND  dt.tanggal BETWEEN DATE '2024-01-01' AND DATE '2024-06-30'
+GROUP  BY 1, 2;
+\end{lstlisting}
+
+Sekarang hanya enam partisi yang muncul pada rencana. Simpan kedua keluaran
+\perintah{EXPLAIN} berdampingan pada \berkas{catatan-optimisasi.md} --- inilah
+bukti pruning yang diminta kriteria kelulusan modul.
+
+\begin{catatan}
+Angka yang paling meyakinkan bukan waktu, melainkan jumlah partisi yang
+disebut pada rencana dan total halaman yang dibaca. Bila tabel Anda memuat 36
+partisi dan query hanya menyentuh 6, Anda membaca sekitar seperenam data ---
+dan angka itu dapat diperiksa siapa pun tanpa menjalankan ulang query Anda.
+\end{catatan}
+
+\langkah{B.4 Menambahkan indeks pada tabel terpartisi}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+-- Indeks pada tabel induk otomatis dibuat pada setiap partisi.
+CREATE INDEX ix_fp_toko_tanggal
+  ON gudang.fakta_penjualan (toko_key, tanggal_key);
+
+ANALYZE gudang.fakta_penjualan;
+\end{lstlisting}
+
+Ukur ulang, lalu catat sebagai tindakan kedua. Bandingkan juga ruang indeks
+yang Anda bayar dengan \perintah{pg\_indexes\_size}.
+
+\subsection{Bagian C: Membandingkan Dua Strategi Agregasi}
+
+\langkah{C.1 Membangun aggregate table}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE TABLE mart.agg_penjualan_bulanan (
+  tahun_bulan     INTEGER     NOT NULL,
+  kategori        VARCHAR(60) NOT NULL,
+  provinsi        VARCHAR(60) NOT NULL,
+  unit_terjual    NUMERIC(14,2) NOT NULL,
+  nilai_penjualan BIGINT      NOT NULL,
+  PRIMARY KEY (tahun_bulan, kategori, provinsi)
+);
+
+INSERT INTO mart.agg_penjualan_bulanan
+SELECT dt.tahun_bulan, dp.kategori, dtk.provinsi,
+       SUM(f.kuantitas), SUM(f.subtotal)
+FROM   gudang.fakta_penjualan f
+JOIN   gudang.dim_tanggal dt ON dt.tanggal_key = f.tanggal_key
+JOIN   gudang.dim_produk  dp ON dp.produk_key  = f.produk_key
+JOIN   gudang.dim_toko   dtk ON dtk.toko_key   = f.toko_key
+GROUP  BY 1, 2, 3;
+\end{lstlisting}
+
+Tulis juga skrip penyegaran \emph{sebagian}, yang hanya menghitung ulang satu
+bulan. Kemampuan inilah yang membedakannya dari materialized view.
+
+\begin{lstlisting}[style=sqlgaya]
+DELETE FROM mart.agg_penjualan_bulanan WHERE tahun_bulan = 202406;
+INSERT INTO mart.agg_penjualan_bulanan
+SELECT ... WHERE f.tanggal_key BETWEEN 20240601 AND 20240630 ...;
+\end{lstlisting}
+
+\langkah{C.2 Membangun materialized view}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+CREATE MATERIALIZED VIEW mart.mv_penjualan_bulanan AS
+SELECT dt.tahun_bulan, dp.kategori, dtk.provinsi,
+       SUM(f.kuantitas) AS unit_terjual,
+       SUM(f.subtotal)  AS nilai_penjualan
+FROM   gudang.fakta_penjualan f
+JOIN   gudang.dim_tanggal dt ON dt.tanggal_key = f.tanggal_key
+JOIN   gudang.dim_produk  dp ON dp.produk_key  = f.produk_key
+JOIN   gudang.dim_toko   dtk ON dtk.toko_key   = f.toko_key
+GROUP  BY 1, 2, 3;
+
+CREATE UNIQUE INDEX ux_mv_penjualan_bulanan
+  ON mart.mv_penjualan_bulanan (tahun_bulan, kategori, provinsi);
+\end{lstlisting}
+
+\langkah{C.3 Membandingkan keduanya}{10 menit}
+
+Ukur ketiga hal berikut untuk masing-masing, lalu lengkapi
+Tabel~\ref{tab:m6-perbandingan}.
+
+\begin{lstlisting}[style=sqlgaya]
+-- Ruang.
+SELECT pg_size_pretty(pg_total_relation_size('mart.agg_penjualan_bulanan')),
+       pg_size_pretty(pg_total_relation_size('mart.mv_penjualan_bulanan'));
+
+-- Waktu penyegaran. Bandingkan penyegaran satu bulan pada aggregate table
+-- dengan penyegaran penuh materialized view.
+\timing on
+REFRESH MATERIALIZED VIEW mart.mv_penjualan_bulanan;
+\timing off
+
+-- Halaman yang dibaca saat menjawab pertanyaan yang sama.
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT kategori, tahun_bulan, nilai_penjualan
+FROM   mart.agg_penjualan_bulanan
+WHERE  provinsi = 'Lampung' AND tahun_bulan BETWEEN 202401 AND 202406;
+\end{lstlisting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Kerangka perbandingan empat tindakan optimisasi}
+\label{tab:m6-perbandingan}
+\begin{tabular}{@{}p{0.24\textwidth}rrrr@{}}
+\toprule
+\textbf{Tindakan} & \textbf{Halaman} & \textbf{Waktu 1} & \textbf{Waktu 3} &
+  \textbf{Ruang} \\
+\midrule
+Baseline & \ldots & \ldots & \ldots & \ldots \\
+Partisi bulanan & \ldots & \ldots & \ldots & \ldots \\
+Partisi + indeks & \ldots & \ldots & \ldots & \ldots \\
+Aggregate table & \ldots & \ldots & \ldots & \ldots \\
+Materialized view & \ldots & \ldots & \ldots & \ldots \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bagian D: Menjalankan Star Query Northwind}
+
+\langkah{D.1 Menulis query setara pada skema ternormalisasi}{10 menit}
+
+Northwind adalah basis data operasional yang ternormalisasi --- bentuk yang
+sama dengan sumber NusaMart sebelum dimodelkan secara dimensional. Tulis satu
+query yang menjawab pertanyaan analitik sederhana: nilai penjualan per kategori
+produk per tahun.
+
+\begin{lstlisting}[style=sqlgaya]
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT c.category_name,
+       EXTRACT(YEAR FROM o.order_date) AS tahun,
+       SUM(od.unit_price * od.quantity * (1 - od.discount)) AS nilai
+FROM       order_details od
+JOIN       orders     o ON o.order_id    = od.order_id
+JOIN       products   p ON p.product_id  = od.product_id
+JOIN       categories c ON c.category_id = p.category_id
+GROUP  BY 1, 2
+ORDER  BY 1, 2;
+\end{lstlisting}
+
+\langkah{D.2 Membandingkan bentuk, bukan hanya biaya}{5 menit}
+
+Bandingkan query di atas dengan star query setara pada NusaMart. Catat pada
+\berkas{catatan-optimisasi.md}:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item berapa join yang diperlukan masing-masing;
+  \item berapa dalam rantai join sampai mencapai atribut kategori;
+  \item ke mana perhitungan nilai penjualan diletakkan --- dihitung saat query,
+        atau sudah tersimpan sebagai measure.
+\end{enumerate}
+
+\begin{catatan}
+Northwind berukuran kecil, sehingga perbandingan waktu tidak bermakna dan
+memang bukan itu yang dicari. Yang dibandingkan adalah \emph{bentuk} query:
+berapa banyak yang harus diketahui penulisnya tentang struktur basis data
+sebelum ia dapat menjawab satu pertanyaan sederhana. Inilah alasan pemodelan
+dimensional ada, dan alasan itu tidak terlihat dari waktu eksekusi.
+\end{catatan}
+
+\begin{luaran}
+\berkas{modul-06-optimisasi/catatan-optimisasi.md} berisi tabel
+sebelum--sesudah untuk empat tindakan dalam satuan halaman dan waktu, dua
+keluaran \perintah{EXPLAIN} berdampingan sebagai bukti pruning, serta
+perbandingan bentuk query Northwind.
+\end{luaran}
+
+\begin{checkpoint}
+Asisten menjalankan \berkas{sql/modul-06/check.sql} dan memeriksa butir berikut:
+\begin{ceklis}
+  \item tabel fakta sudah berpartisi menurut rentang, dengan partisi bulanan
+        dan satu partisi \perintah{DEFAULT};
+  \item jumlah baris sesudah pemindahan sama persis dengan sebelumnya;
+  \item dataset yang dipakai berukuran sedang, bukan kecil;
+  \item aggregate table dan materialized view ada pada schema \perintah{mart}
+        dan keduanya menghasilkan angka yang sama;
+  \item \berkas{catatan-optimisasi.md} memuat bukti pruning berupa dua keluaran
+        \perintah{EXPLAIN} yang dibandingkan;
+  \item pengukuran menyertakan \perintah{BUFFERS} dan menyebutkan pengaruh
+        cache pada eksekusi kedua;
+  \item setiap tindakan disertai keterangan apa yang dibeli dan apa yang
+        dibayar.
+\end{ceklis}
+\end{checkpoint}
+
+\section{Latihan Mandiri di Kelas}
+
+\latihan{Memprediksi tindakan terbaik untuk pola filter berbeda}
+
+Untuk setiap pola berikut, prediksi tindakan mana --- partisi, indeks,
+aggregate table, atau tidak sama sekali --- yang paling menguntungkan.
+Tuliskan prediksi \emph{sebelum} mengujinya, lalu uji dan jelaskan selisihnya.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Laporan bulanan yang selalu meminta satu bulan terakhir.
+  \item Pencarian satu nomor struk tertentu.
+  \item Dashboard yang menampilkan total tiga tahun terakhir per kategori.
+  \item Analisis yang menyaring satu produk sepanjang seluruh riwayat.
+\end{enumerate}
+
+\latihan{Menakar biaya penyegaran}
+
+Ukur waktu penyegaran materialized view sekarang, lalu jawab:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Bila data tumbuh dua kali lipat, kira-kira menjadi berapa lama?
+  \item Bila hanya data satu hari yang berubah, berapa bagian dari pekerjaan
+        penyegaran itu yang sebenarnya sia-sia?
+  \item Pada ukuran data berapa penyegaran penuh menjadi tidak masuk akal
+        untuk dijalankan setiap malam? Nyatakan asumsi Anda.
+\end{enumerate}
+
+\section{Tugas Individu}
+
+\subsection{Pekerjaan Wajib}
+Pilih aggregate table atau materialized view untuk beban kerja NusaMart dan
+dukung pilihan dengan biaya ruang, refresh, dan pola pemakaian.
+
+Kumpulkan \berkas{pilihan-agregasi.md} yang memuat:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item asumsi beban kerja yang dinyatakan eksplisit --- berapa kali sehari
+        pertanyaan itu diajukan, dan seberapa segar data yang dituntut;
+  \item pengukuran ruang keduanya, beserta perbandingannya terhadap ukuran
+        tabel fakta;
+  \item pengukuran waktu penyegaran penuh lawan penyegaran sebagian, beserta
+        proyeksinya bila data tumbuh lima kali lipat;
+  \item pilihan Anda beserta alasannya, dan --- ini yang dinilai ---
+        \textbf{kondisi yang akan membuat Anda mengubah pilihan itu}.
+\end{enumerate}
+
+\begin{catatan}
+Butir keempat memisahkan jawaban yang dihafal dari jawaban yang dipahami.
+Tidak ada pilihan yang benar untuk semua keadaan: materialized view menang
+ketika datanya kecil dan kodenya ingin ringkas; aggregate table menang ketika
+data terus tumbuh dan hanya sebagian kecil yang berubah setiap hari.
+Sebutkan ambang yang membuat Anda berpindah.
+\end{catatan}
+
+\subsection{Pertanyaan Analisis}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Query Anda pada Bagian B.2 menghasilkan angka yang benar tetapi membaca
+        seluruh partisi. Jelaskan mengapa kesalahan semacam ini sulit
+        ditemukan di lingkungan sebenarnya, dan usulkan satu cara agar ia
+        ketahuan lebih awal.
+  \item Partisi bulanan memberi keuntungan bagi query yang menyaring rentang
+        tanggal. Sebutkan satu pola query pada NusaMart yang justru
+        \emph{dirugikan} oleh partisi bulanan, beserta alasannya.
+  \item Seorang rekan melaporkan bahwa query-nya menjadi sepuluh kali lebih
+        cepat setelah ia membuat indeks, dengan bukti waktu eksekusi sebelum
+        dan sesudah. Sebutkan dua sebab lain yang mungkin menjelaskan
+        percepatan itu, dan pengukuran apa yang akan Anda minta untuk
+        memastikannya.
+\end{enumerate}
+
+\section{Format Pengumpulan dan Checklist}
+
+Kumpulkan catatan optimisasi dengan kondisi uji, plan, halaman buffer, waktu,
+dan interpretasi untuk setiap tindakan.
+
+Seluruh berkas diletakkan pada \berkas{modul-06-optimisasi/}.
+
+\begin{ceklis}
+  \item \berkas{pre-lab.md} dan \berkas{baseline.md}
+  \item \berkas{ddl-partisi.sql}
+  \item \berkas{ddl-agregat.sql} --- aggregate table, skrip penyegaran
+        sebagian, dan materialized view
+  \item \berkas{catatan-optimisasi.md} --- tabel empat tindakan, bukti pruning,
+        dan perbandingan Northwind
+  \item \berkas{pilihan-agregasi.md}
+  \item \berkas{jawaban-analisis.md}
+  \item Setiap angka disertai keterangan kondisi ujinya: ukuran dataset,
+        eksekusi keberapa, dan apakah \perintah{ANALYZE} sudah dijalankan.
+\end{ceklis}
+
+\section{Troubleshooting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Masalah yang lazim muncul pada Modul 6 dan penanganannya}
+\label{tab:m6-troubleshooting}
+\begin{tabular}{@{}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.62\textwidth}@{}}
+\toprule
+\textbf{Gejala} & \textbf{Penanganan} \\
+\midrule
+\perintah{no partition of relation found for row} &
+  Ada baris yang tanggalnya di luar seluruh rentang partisi --- paling sering
+  baris unknown berkunci $-1$ dari Modul 5. Buat partisi
+  \perintah{DEFAULT}. \\
+Seluruh partisi tetap dibaca &
+  Penyaringan hanya ada pada \perintah{dim\_tanggal}. Tambahkan predikat atas
+  \perintah{f.tanggal\_key}; ini bukan kekurangan partisi melainkan syaratnya. \\
+\perintah{cannot create index on partitioned table ... CONCURRENTLY} &
+  Indeks pada tabel induk tidak dapat dibuat secara concurrent. Buat biasa,
+  atau buat per partisi. \\
+Partisi \perintah{DEFAULT} berisi banyak baris &
+  Ada rentang bulan yang belum dibuatkan partisinya. Periksa
+  \perintah{MIN} dan \perintah{MAX} \perintah{tanggal\_key}, lalu lengkapi. \\
+Waktu justru bertambah setelah partisi &
+  Query menyentuh seluruh partisi, sehingga menanggung ongkos perencanaan
+  tambahan tanpa memperoleh pruning. Periksa predikatnya. \\
+Perencana memilih \perintah{Seq Scan} meski indeks ada &
+  Bila query memang membaca sebagian besar tabel, ini pilihan yang benar.
+  Periksa apakah selektivitas predikat Anda memang tinggi. \\
+Angka aggregate table dan materialized view berbeda &
+  Salah satunya belum disegarkan setelah fakta berubah. Inilah risiko yang
+  disebut pada Konsep Dasar --- catat kejadiannya sebagai temuan. \\
+\perintah{REFRESH ... CONCURRENTLY} ditolak &
+  Materialized view belum memiliki indeks \perintah{UNIQUE}. Buat lebih
+  dahulu. \\
+Waktu eksekusi berubah-ubah antarpengulangan &
+  Wajar. Bandingkan halaman, bukan detik, dan catat eksekusi keberapa setiap
+  angka diambil. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ringkasan}
+
+Modul ini menuntut satu hal yang tidak dituntut modul sebelumnya: setiap klaim
+harus disertai bukti dalam satuan yang tidak berubah-ubah. Tiga gagasan perlu
+dibawa ke Modul 7.
+
+\emph{Pertama}, partisi tidak mempercepat apa pun dengan sendirinya. Ia hanya
+membuka kemungkinan untuk tidak membaca --- dan kemungkinan itu baru terpakai
+bila penyaringan menyentuh kunci partisi. Query yang benar hasilnya tetapi
+tidak memangkas partisi adalah kegagalan yang tidak menimbulkan galat apa pun.
+
+\emph{Kedua}, agregasi yang disimpan lebih dahulu selalu menukar tiga hal:
+ruang, waktu penyegaran, dan kesegaran data. Pilihan antara aggregate table dan
+materialized view bukan soal mana yang lebih baik, melainkan soal seberapa
+besar bagian data yang berubah setiap hari.
+
+\emph{Ketiga}, cache membuat pengukuran waktu tidak dapat dipercaya. Halaman
+yang disentuh tidak berubah oleh cache maupun beban laptop, dan hanya angka
+semacam itu yang layak dipakai untuk membandingkan dua rancangan.
+
+Perbandingan dengan Northwind menutup paruh perancangan praktikum ini. Sampai
+sini, seluruh data berasal dari \emph{satu} sumber yang sudah rapi. Modul 7
+memulai persoalan yang sama sekali berbeda: menyatukan tiga sumber operasional
+yang sengaja tidak sepakat satu sama lain.

@@ -1,0 +1,24 @@
+# =============================================================================
+# Contoh ~/.dbt/profiles.yml
+#
+# Salin ke ~/.dbt/profiles.yml -- DI LUAR repositori. Berkas ini memuat
+# kredensial, dan kredensial yang pernah ter-commit tetap ada pada riwayat Git
+# meskipun berkasnya kemudian dihapus.
+#
+# Bentuk env_var membaca kata sandi dari lingkungan, sehingga berkasnya sendiri
+# tetap aman dibagikan:
+#
+#   export DW_PASSWORD='...'
+# =============================================================================
+nusamart:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5434
+      user: praktikum
+      password: "{{ env_var('DW_PASSWORD') }}"
+      dbname: nusamart_dw
+      schema: dbt_mart
+      threads: 4

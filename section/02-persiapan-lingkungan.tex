@@ -1,0 +1,169 @@
+\chapter{Persiapan Lingkungan Praktikum}
+
+\section{Perangkat yang Digunakan}
+
+Praktikum memakai PostgreSQL 17 sebagai inti gudang data, DBeaver sebagai klien
+SQL, Python 3.11 atau lebih baru untuk pipeline ETL, serta Git untuk versi dan
+pengumpulan. Seluruh layanan dijalankan dari Docker sehingga satu kelas berada
+pada versi yang sama.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.26\textwidth}p{0.28\textwidth}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Perkakas} & \textbf{Peran} & \textbf{Dipakai pada} \\
+\midrule
+PostgreSQL 17 & Inti gudang data & Seluruh modul \\
+DBeaver & Klien SQL dan diagram E/R & Seluruh modul \\
+Python 3.11+ & ETL dan pembangkitan data & Modul 7, proyek akhir \\
+Git & Versi dan pengumpulan & Seluruh modul \\
+Docker Compose & Reproduksibilitas lingkungan & Seluruh modul \\
+dbt Core & Transformasi, dokumentasi, lineage & Modul 8, proyek akhir \\
+Apache Superset & Dashboard dan eksplorasi visual & Modul 9, proyek akhir \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Pustaka Python yang diperlukan: \perintah{psycopg2-binary}, \perintah{SQLAlchemy},
+\perintah{pandas}, dan \perintah{Faker}. Seluruhnya tercantum pada
+\berkas{requirements.txt}.
+
+dbt Core dan Superset bersifat pengenalan. Keduanya ditunjukkan dan dipakai
+secara terbimbing, tetapi tidak dinilai sedalam PostgreSQL dan Python.
+
+\section{Instalasi}
+
+Mahasiswa memasang Docker Desktop, DBeaver Community, Git, dan Python 3.11+ di
+laptop masing-masing. Sisanya disediakan oleh \berkas{docker-compose.yml}.
+
+\begin{lstlisting}[style=shellgaya]
+git clone <url-repositori-kelas> praktikum-pgd
+cd praktikum-pgd
+cp etl/config/.env.example .env
+docker compose pull          # dikerjakan di rumah, bukan di laboratorium
+docker compose up -d
+docker compose ps
+\end{lstlisting}
+
+Lingkungan menyediakan tiga layanan. Pemisahan basis data sumber dan gudang
+sejak awal membuat batas keduanya terasa nyata: tidak ada query yang dapat
+menyeberang begitu saja dari satu ke yang lain.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.24\textwidth}p{0.10\textwidth}p{0.26\textwidth}p{0.30\textwidth}@{}}
+\toprule
+\textbf{Layanan} & \textbf{Port} & \textbf{Basis data} & \textbf{Peran} \\
+\midrule
+\perintah{postgres\_source} & 5433 & \perintah{nusamart\_oltp} &
+  Sistem operasional NusaMart \\
+\perintah{postgres\_dw} & 5434 & \perintah{nusamart\_dw} &
+  Gudang data yang dibangun mahasiswa \\
+\perintah{superset} & 8088 & --- & Dashboard, mulai Modul 9 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Port sengaja digeser dari 5432 agar tidak berbenturan dengan PostgreSQL yang
+mungkin sudah terpasang langsung di laptop.
+
+\subsection{Ekstensi PostgreSQL}
+
+Ekstensi berikut diaktifkan asisten pada basis data gudang sebelum modul yang
+memerlukannya.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Ekstensi PostgreSQL yang perlu diaktifkan}
+\label{tab:ekstensi}
+\begin{tabular}{@{}p{0.24\textwidth}p{0.54\textwidth}p{0.12\textwidth}@{}}
+\toprule
+\textbf{Ekstensi} & \textbf{Untuk apa} & \textbf{Modul} \\
+\midrule
+\perintah{btree\_gist} & Exclusion constraint penjaga versi SCD-2 & 3 \\
+\perintah{postgres\_fdw} & Membaca basis data sumber lain secara langsung & 7 \\
+\perintah{tablefunc} & \perintah{crosstab} untuk pivot, opsional & 9 \\
+\perintah{pg\_stat\_statements} & Pemantauan query operasional & Proyek akhir \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Uji Lingkungan}
+
+Jalankan pemeriksaan berikut sebelum memulai setiap modul. Ketiganya harus
+memberi keluaran, bukan pesan galat.
+
+\begin{lstlisting}[style=shellgaya]
+docker compose ps
+
+docker compose exec postgres_source \
+  psql -U praktikum -d nusamart_oltp -c "SELECT version();"
+
+docker compose exec postgres_dw \
+  psql -U praktikum -d nusamart_dw   -c "SELECT current_database();"
+\end{lstlisting}
+
+Untuk modul yang memakai Python, tambahkan pemeriksaan berikut.
+
+\begin{lstlisting}[style=pythongaya]
+import sys, psycopg2, sqlalchemy, pandas as pd
+
+print("Python     :", sys.version.split()[0])
+print("psycopg2   :", psycopg2.__version__)
+print("SQLAlchemy :", sqlalchemy.__version__)
+print("pandas     :", pd.__version__)
+\end{lstlisting}
+
+\section{Aturan Reproduksibilitas}
+
+Setiap luaran wajib dapat dijalankan ulang dari awal oleh orang lain di laptop
+yang berbeda. Karena itu berlaku aturan berikut sepanjang praktikum.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Skrip DDL bersifat \istilah{idempoten}: memakai
+        \perintah{DROP ... IF EXISTS} atau \perintah{CREATE ... IF NOT EXISTS}
+        sehingga dapat dijalankan dua kali tanpa galat.
+  \item Pipeline ETL harus idempoten: dijalankan dua kali berturut-turut, jumlah
+        baris tidak berubah dan tidak ada versi dimensi yang kembar.
+  \item Kredensial tidak pernah ditulis di dalam skrip. Nilainya dibaca dari
+        \berkas{.env}, dan \berkas{.env} tidak masuk version control.
+  \item Nilai \perintah{--seed} pembangkit data dicatat pada laporan. Tanpa
+        seed, angka hasil profiling tidak dapat dibandingkan.
+  \item Path ditulis relatif terhadap akar repositori, bukan path absolut yang
+        hanya ada di laptop sendiri.
+  \item Data mentah bersifat \istilah{read-only}. Perbaikan kualitas data
+        dilakukan pada \perintah{staging} atau \perintah{gudang}, tidak pernah
+        pada basis data sumber.
+\end{enumerate}
+
+\section{Penyiapan Data}
+
+Data NusaMart dibangkitkan dengan \perintah{Faker} oleh skrip yang disediakan
+asisten, dan tersedia dalam tiga ukuran. Penjenjangan ini penting: pada 100 ribu
+baris, \istilah{sequential scan} justru menang, sehingga Modul 6 tidak akan
+memperlihatkan apa pun bila memakai ukuran kecil.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.16\textwidth}p{0.26\textwidth}p{0.48\textwidth}@{}}
+\toprule
+\textbf{Ukuran} & \textbf{Baris fakta} & \textbf{Dipakai pada} \\
+\midrule
+Kecil  & $\approx$100 ribu & Modul 2--5 \\
+Sedang & $\approx$5 juta   & Modul 6--8, wajib pada Modul 6 \\
+Besar  & $\approx$50 juta  & Opsional, bagi yang ingin melihat partisi dan
+                             agregat benar-benar berbeda \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Mulai Modul 7, dua sumber operasional tambahan disediakan dengan
+ketidaksepakatan yang sengaja ditanam: penamaan kolom berbeda, satuan berat
+berbeda antara gram dan kilogram, kode kategori berbeda, pelanggan yang sama
+tercatat dengan ejaan berbeda, dan sebagian transaksi datang terlambat tiga
+hari. Basis data Northwind disediakan terpisah sebagai pembanding pada Modul 6.
+
+Artefak besar dan data yang dapat dibangkitkan ulang tidak disimpan ke
+repositori. Data asli diletakkan sebagai read-only di \berkas{data/raw/} dan
+hasil proses di \berkas{data/processed/}.

@@ -1,0 +1,758 @@
+\chapter{dbt Core: Transformasi, Dokumentasi, dan Lineage}
+\label{modul:dbt-transformasi-dokumentasi-lineage}
+
+\section{Identitas Modul}
+
+\begin{identitasmodul}
+\textbf{Sumber materi}    & Pertemuan 10 dan 11 \\
+\textbf{CPMK}             & CPMK-092 dan CPMK-102 \\
+\textbf{Minggu pelaksanaan} & Minggu ke-11 \\
+\textbf{Durasi tatap muka} & 120 menit \\
+\textbf{Estimasi tugas}   & 4--5 jam di luar sesi \\
+\textbf{Moda kerja}       & Individual \\
+\textbf{Perangkat}        & dbt Core dan PostgreSQL 17 \\
+\textbf{Dataset}          & Staging NusaMart hasil pipeline ETL Modul 7 \\
+\textbf{Skrip pendukung}  & Kerangka proyek dbt pada \berkas{dbt/modul-08/} \\
+\textbf{Luaran}           & Proyek dbt yang berjalan, tangkapan graf lineage, dan DDL audit dimension \\
+\end{identitasmodul}
+
+\slideref{10 dan 11}
+
+\section{Capaian dan Indikator Keberhasilan}
+
+Mahasiswa mampu menyusun transformasi berlapis dari source ke staging dan mart,
+mendokumentasikan model, membaca lineage, serta menjalankan pengujian dasar.
+Target minimum modul adalah \perintah{dbt build} tanpa galat dan lineage utuh
+dari source hingga mart.
+
+\begin{capaian}
+Pada akhir modul ini mahasiswa mampu:
+\begin{enumerate}[leftmargin=1.4em]
+  \item menjelaskan apa yang diperoleh ketika transformasi diperlakukan sebagai
+        kode yang diversikan, bukan sebagai skrip yang dijalankan manual;
+  \item mendefinisikan \perintah{source} dan membangun model berlapis dari
+        staging ke mart dengan \perintah{ref};
+  \item mendokumentasikan model dan kolom pada \berkas{schema.yml}, lalu
+        membaca graf lineage yang dihasilkan \perintah{dbt docs generate};
+  \item membangun \istilah{audit dimension} sehingga setiap baris fakta dapat
+        ditelusuri ke batch pemuatan yang menghasilkannya;
+  \item memasang empat generic data test dan menafsirkan kegagalannya.
+\end{enumerate}
+\end{capaian}
+
+Modul ini menopang dua pertemuan sekaligus --- Pertemuan 10 tentang proses
+ETL/ELT dan Pertemuan 11 tentang metadata, lineage, dan auditabilitas.
+Keduanya bertemu pada satu gagasan: transformasi yang ditulis sebagai kode
+menghasilkan metadata-nya sendiri sebagai efek samping.
+
+\section{Prasyarat dan Persiapan}
+
+\subsection{Prasyarat}
+
+\begin{itemize}
+  \item Pipeline dan schema \perintah{staging} hasil Modul 7 yang sudah terisi;
+  \item SQL tingkat menengah: \perintah{CTE}, agregasi, dan join berlapis;
+  \item Jinja tingkat dasar --- cukup memahami bahwa \perintah{\{\{ ... \}\}}
+        adalah tempat yang diganti sebelum SQL dijalankan;
+  \item konsep metadata teknis: nama objek, tipe kolom, dan asal-usul data;
+  \item Git dasar, karena proyek dbt hanya bermakna bila diversikan.
+\end{itemize}
+
+\subsection{Pre-lab}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Pasang dbt Core beserta adapter PostgreSQL:
+\begin{lstlisting}[style=shellgaya]
+python -m pip install dbt-core dbt-postgres
+dbt --version
+\end{lstlisting}
+  \item Salin kerangka proyek yang disediakan asisten ke repositori Anda:
+\begin{lstlisting}[style=shellgaya]
+cp -r dbt/modul-08 modul-08-dbt/
+cd modul-08-dbt
+\end{lstlisting}
+  \item Susun \berkas{\textasciitilde/.dbt/profiles.yml} dari contoh yang
+        disediakan. Berkas ini berada di luar repositori --- lihat peringatan
+        pada Bagian~A.
+  \item Siapkan jawaban berikut pada \berkas{modul-08-dbt/pre-lab.md}:
+  \begin{enumerate}[label=\alph*.,leftmargin=1.4em]
+    \item Pada Modul 7 Anda menulis urutan pemuatan sendiri di dalam
+          \berkas{pipeline.py}. Bagaimana Anda memastikan dimensi selalu dimuat
+          sebelum fakta?
+    \item Bila seorang rekan menambah satu model baru yang bergantung pada
+          model Anda, bagaimana ia tahu urutan yang benar?
+    \item Sebutkan satu pertanyaan tentang data yang \emph{tidak} dapat dijawab
+          dengan membaca kode SQL saja.
+  \end{enumerate}
+\end{enumerate}
+
+\section{Konsep Dasar}
+
+\subsection{Transformasi sebagai Kode}
+
+Sampai Modul 7, urutan pemuatan ditentukan oleh urutan pemanggilan fungsi di
+dalam \berkas{pipeline.py}. Urutan itu benar, tetapi hanya diketahui oleh yang
+menulisnya --- dan harus diperbarui manual setiap kali ada model baru.
+
+dbt membalik hubungan itu. Anda menulis \emph{apa} yang bergantung pada apa,
+lalu dbt menyusun urutannya sendiri.
+
+\begin{konsep}{Empat hal yang diperoleh}
+\begin{enumerate}[leftmargin=1.4em]
+  \item \textbf{Urutan otomatis.} Ketergantungan dinyatakan lewat
+        \perintah{ref}, dan dbt menurunkan urutan build dari situ.
+  \item \textbf{Version control.} Transformasi menjadi berkas teks yang dapat
+        di-\emph{diff}, ditinjau, dan dikembalikan.
+  \item \textbf{Dokumentasi yang menyatu.} Deskripsi ditulis di sebelah
+        modelnya, bukan pada dokumen terpisah yang cepat basi.
+  \item \textbf{Lineage gratis.} Graf ketergantungan adalah hasil sampingan
+        dari \perintah{ref} --- tidak ada pekerjaan tambahan untuk
+        memperolehnya.
+\end{enumerate}
+\end{konsep}
+
+Butir keempat inilah alasan RANCANGAN praktikum ini menolak perkakas lineage
+tersendiri. Lineage yang harus dipelihara terpisah akan selalu tertinggal dari
+kodenya; lineage yang \emph{diturunkan} dari kode tidak bisa tertinggal.
+
+\subsection{Sources, Models, dan Materialization}
+
+Dua fungsi Jinja membangun seluruh graf, dan perbedaannya menentukan bentuk
+lineage Anda.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.34\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Fungsi} & \textbf{Menunjuk} & \textbf{Dipakai untuk} \\
+\midrule
+\perintah{source()} & Tabel yang \emph{tidak} dibangun dbt &
+  Tabel \perintah{staging} hasil pipeline Modul 7 \\
+\perintah{ref()} & Model lain di dalam proyek dbt &
+  Seluruh ketergantungan antarmodel \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{peringatan}
+Menulis nama tabel secara langsung --- \perintah{FROM staging.penjualan} alih-alih
+\perintah{FROM \{\{ source('nusamart', 'penjualan') \}\}} --- tetap
+menghasilkan SQL yang berjalan. Yang hilang adalah ketergantungannya: model itu
+tidak muncul pada graf lineage, dan dbt tidak tahu ia harus dibangun sesudah
+apa. Kesalahan ini tidak menimbulkan galat, hanya graf yang bohong.
+\end{peringatan}
+
+\istilah{Materialization} menentukan wujud model di basis data.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}>{\raggedright\arraybackslash}p{0.36\textwidth}@{}}
+\toprule
+\textbf{Materialization} & \textbf{Wujudnya} & \textbf{Dipakai untuk} \\
+\midrule
+\perintah{view} & \perintah{CREATE VIEW} & Model staging: murah, selalu segar \\
+\perintah{table} & \perintah{CREATE TABLE} & Model mart: mahal dibangun,
+  murah dibaca \\
+\perintah{incremental} & Menambah baris baru saja & Fakta besar yang tumbuh \\
+\perintah{ephemeral} & Disisipkan sebagai CTE & Perantara yang tidak perlu ada
+  di basis data \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Aturan praktis yang dipakai modul ini: \emph{staging} sebagai
+\perintah{view}, \emph{mart} sebagai \perintah{table}. Pertukarannya sama
+dengan yang Anda ukur pada Modul 6 --- ruang dan waktu pembangunan ditukar
+dengan waktu pembacaan.
+
+\subsection{Dokumentasi dan Graf Lineage}
+
+Deskripsi model dan kolom ditulis pada berkas \berkas{schema.yml} yang berada
+di direktori yang sama dengan modelnya. Kedekatan ini disengaja: dokumentasi
+yang berjauhan dari kodenya akan basi dalam hitungan minggu.
+
+\perintah{dbt docs generate} menggabungkan tiga hal --- deskripsi yang Anda
+tulis, katalog basis data yang dibaca dbt, dan graf ketergantungan dari
+\perintah{ref} --- menjadi satu situs statis. Graf lineage yang muncul di
+situ bukan gambar yang Anda buat, melainkan hasil pembacaan kode Anda sendiri.
+
+\begin{konsep}{Dua arah membaca lineage}
+\begin{itemize}
+  \item \textbf{Ke hulu} (\emph{upstream}): angka ini berasal dari mana?
+        Dipakai saat menelusuri angka yang mencurigakan.
+  \item \textbf{Ke hilir} (\emph{downstream}): kalau saya mengubah model ini,
+        apa saja yang ikut rusak? Dipakai sebelum mengubah apa pun.
+\end{itemize}
+\end{konsep}
+
+\subsection{Audit Dimension}
+
+Tabel \perintah{gudang.audit\_muat} yang Anda isi pada Modul 7 mencatat
+\emph{jalannya} pipeline. \istilah{Audit dimension} melangkah lebih jauh: ia
+menghubungkan catatan itu ke \emph{setiap baris fakta}, sehingga pertanyaan
+``baris ini dimuat kapan, dari sumber mana, oleh pipeline versi berapa?''
+dapat dijawab dengan satu join.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.26\textwidth}>{\raggedright\arraybackslash}p{0.64\textwidth}@{}}
+\toprule
+\textbf{Kolom} & \textbf{Gunanya} \\
+\midrule
+\perintah{batch\_id} & Menghubungkan ke catatan \perintah{audit\_muat} \\
+\perintah{waktu\_muat} & Kapan baris ini masuk gudang \\
+\perintah{sumber} & Sistem operasional asalnya \\
+\perintah{versi\_pipeline} & Kode versi berapa yang menghasilkannya \\
+\perintah{status\_mutu} & Lulus, lulus dengan catatan, atau dikarantina \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Kegunaannya terasa ketika sesuatu salah. Bila ditemukan bahwa pipeline versi
+tertentu mengandung cacat, audit dimension menjawab dengan tepat baris fakta
+mana saja yang perlu dimuat ulang --- tanpanya, satu-satunya pilihan aman
+adalah memuat ulang semuanya.
+
+\subsection{Pengujian Data Dasar}
+
+dbt menyediakan empat uji baku yang cukup untuk menangkap sebagian besar
+kerusakan. Keempatnya ditulis sebagai beberapa baris YAML, bukan sebagai kode.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.22\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}>{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+\toprule
+\textbf{Uji} & \textbf{Memeriksa} & \textbf{Contoh pada NusaMart} \\
+\midrule
+\perintah{not\_null} & Kolom tidak kosong &
+  Kunci dimensi pada fakta \\
+\perintah{unique} & Nilai tidak berulang &
+  \perintah{produk\_key} pada dimensi \\
+\perintah{relationships} & Setiap nilai ada di tabel rujukan &
+  Fakta menunjuk dimensi yang benar-benar ada \\
+\perintah{accepted\_values} & Nilai berada dalam daftar &
+  \perintah{status} hanya berisi nilai yang dikenal \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatan}
+Uji \perintah{relationships} adalah versi dbt dari \perintah{FOREIGN KEY}, dan
+keduanya tidak saling menggantikan. Constraint basis data menolak baris salah
+\emph{saat dimasukkan}; uji dbt melaporkan baris salah \emph{setelah}
+transformasi berjalan --- termasuk pada model yang berupa view, yang tidak
+dapat diberi constraint sama sekali.
+\end{catatan}
+
+Modul ini memakai keempat uji sebagai pengenalan. Perancangan aturan kualitas
+yang sesungguhnya --- termasuk custom test, ambang, dan karantina --- menjadi
+bahan Modul 10.
+
+\section{Studi Kasus dan Protokol Praktikum}
+
+Mahasiswa melengkapi kerangka dbt yang telah disediakan. Fokus sesi adalah
+memahami struktur proyek dan hubungan transformasi, bukan memulai seluruh
+proyek dari nol.
+
+Proyek dbt membangun ulang jalur \perintah{staging} sampai \perintah{mart}
+sebagai kode, dengan keluaran pada schema \perintah{dbt\_mart} yang
+\emph{terpisah} dari \perintah{gudang} bikinan tangan. Pemisahan ini
+disengaja: pada akhir sesi, angka keduanya dibandingkan, dan keduanya harus
+sama.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.28\textwidth}p{0.16\textwidth}>{\raggedright\arraybackslash}p{0.48\textwidth}@{}}
+\toprule
+\textbf{Model} & \textbf{Lapis} & \textbf{Keadaan pada kerangka} \\
+\midrule
+\perintah{stg\_penjualan} & staging & Disediakan lengkap sebagai contoh \\
+\perintah{stg\_produk}    & staging & Disediakan lengkap \\
+\perintah{stg\_toko}      & staging & \textbf{Dilengkapi mahasiswa} \\
+\perintah{dim\_audit}     & mart    & Disediakan lengkap \\
+\perintah{dim\_produk}    & mart    & Disediakan lengkap sebagai contoh SCD-2 \\
+\perintah{fct\_penjualan} & mart    & \textbf{Dilengkapi mahasiswa} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{catatanasisten}
+Kerangka sengaja setengah jadi. Dua model yang dikosongkan dipilih supaya
+mahasiswa harus memakai \perintah{source} sekali dan \perintah{ref} beberapa
+kali --- keduanya wajib dipahami agar graf lineage terbentuk utuh.
+
+Bila sesi berjalan lambat, prioritaskan Bagian B sampai D. Bagian E dapat
+dipindahkan ke tugas luar laboratorium tanpa merusak alur modul, karena
+pengujian dibahas lebih dalam pada Modul 10.
+\end{catatanasisten}
+
+\section{Alur Praktikum 120 Menit}
+
+\begin{alurwaktu}
+0--15 & Demonstrasi source, ref, build, dan docs. \\
+15--95 & Kerja terbimbing: staging, mart, dokumentasi, lineage, audit, dan test. \\
+95--110 & Checkpoint dbt build serta graf lineage. \\
+110--120 & Penjelasan tugas penelusuran satu angka. \\
+\end{alurwaktu}
+
+\section{Prosedur Praktikum Terbimbing}
+
+\subsection{Bagian A: Menghubungkan dbt ke PostgreSQL}
+
+\langkah{A.1 Menyusun profil koneksi}{10 menit}
+
+\begin{lstlisting}[style=yamlgaya]
+# ~/.dbt/profiles.yml  -- DI LUAR repositori
+nusamart:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5434
+      user: praktikum
+      password: "{{ env_var('DW_PASSWORD') }}"
+      dbname: nusamart_dw
+      schema: dbt_mart
+      threads: 4
+\end{lstlisting}
+
+\begin{peringatan}
+Berkas \berkas{profiles.yml} memuat kredensial dan karena itu berada di
+\berkas{\textasciitilde/.dbt/}, \textbf{bukan} di dalam repositori. Bentuk
+\perintah{env\_var} membaca kata sandi dari lingkungan, sehingga berkasnya
+sendiri tetap aman dibagikan. Repositori Anda hanya memuat
+\berkas{profiles.yml.example} tanpa nilai sebenarnya.
+\end{peringatan}
+
+\langkah{A.2 Menguji koneksi}{5 menit}
+
+\begin{lstlisting}[style=shellgaya]
+export DW_PASSWORD='...'
+dbt debug          # memeriksa profil, koneksi, dan berkas proyek
+dbt deps           # memasang paket bila ada
+\end{lstlisting}
+
+Seluruh baris keluaran \perintah{dbt debug} harus bertanda \perintah{OK}.
+Jangan lanjut sebelum itu tercapai --- galat koneksi yang muncul di tengah
+pembangunan model jauh lebih sulit dibaca.
+
+\subsection{Bagian B: Mendefinisikan Source dan Staging}
+
+\langkah{B.1 Membaca definisi source}{10 menit}
+
+\begin{lstlisting}[style=yamlgaya]
+# models/sources.yml
+version: 2
+
+sources:
+  - name: nusamart
+    description: >
+      Tabel staging hasil pipeline ETL Modul 7. Berisi salinan tiga sumber
+      operasional yang sudah distandardisasi satuan dan kodenya.
+    database: nusamart_dw
+    schema: staging
+    tables:
+      - name: penjualan_gabungan
+        description: Satu baris per produk per baris struk, dari tiga sumber.
+        columns:
+          - name: transaksi_id
+            description: Nomor transaksi pada sistem sumber.
+      - name: produk_gabungan
+        description: Produk dari tiga sumber, berat sudah dalam gram.
+\end{lstlisting}
+
+Deskripsi bukan hiasan. Ia muncul pada situs dokumentasi, dan pada Bagian D
+Anda akan membacanya kembali sebagai pengguna, bukan sebagai penulis.
+
+\langkah{B.2 Melengkapi model staging}{15 menit}
+
+Model \perintah{stg\_penjualan} disediakan lengkap sebagai contoh. Perhatikan
+tiga hal: \perintah{config} materialization, pemakaian \perintah{source}, dan
+penamaan kolom yang diseragamkan.
+
+\begin{lstlisting}[style=sqlgaya]
+-- models/staging/stg_penjualan.sql
+{{ config(materialized='view') }}
+
+WITH sumber AS (
+    SELECT * FROM {{ source('nusamart', 'penjualan_gabungan') }}
+)
+SELECT transaksi_id,
+       nomor_struk,
+       produk_id,
+       toko_id,
+       pelanggan_master_id AS pelanggan_id,
+       waktu_transaksi::DATE AS tanggal_transaksi,
+       kuantitas,
+       harga_satuan,
+       diskon,
+       subtotal,
+       sumber        AS sistem_asal,
+       batch_id
+FROM   sumber
+WHERE  status <> 'BATAL'
+\end{lstlisting}
+
+Lengkapi \perintah{stg\_toko} dengan pola yang sama, lalu bangun:
+
+\begin{lstlisting}[style=shellgaya]
+dbt run --select staging
+\end{lstlisting}
+
+\subsection{Bagian C: Membangun Model Mart}
+
+\langkah{C.1 Membaca model mart contoh}{10 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+-- models/mart/dim_produk.sql
+{{ config(materialized='table') }}
+
+SELECT produk_id,
+       sku,
+       nama_produk,
+       kategori,
+       berat_gram,
+       mulai_berlaku,
+       selesai_berlaku,
+       baris_kini
+FROM   {{ ref('stg_produk') }}
+\end{lstlisting}
+
+Perhatikan \perintah{ref}, bukan nama tabel. Inilah satu-satunya cara dbt
+mengetahui bahwa model ini harus dibangun \emph{sesudah}
+\perintah{stg\_produk}.
+
+\langkah{C.2 Melengkapi fct\_penjualan}{20 menit}
+
+Model ini sengaja dikosongkan. Ia harus memakai \perintah{ref} ke seluruh
+model dimensi, dan menerapkan dua aturan yang sudah Anda pegang sejak Modul 3
+dan Modul 5.
+
+\begin{lstlisting}[style=sqlgaya]
+-- models/mart/fct_penjualan.sql
+{{ config(materialized='table') }}
+
+SELECT f.transaksi_id,
+       f.nomor_struk,
+       COALESCE(p.produk_key, -1)   AS produk_key,   -- baris unknown
+       COALESCE(t.toko_key, -1)     AS toko_key,
+       a.audit_key,
+       f.tanggal_transaksi,
+       f.kuantitas,
+       f.harga_satuan,
+       f.diskon,
+       f.subtotal
+FROM       {{ ref('stg_penjualan') }} f
+-- LEFT JOIN, dan pencarian versi memakai rentang tanggal transaksi
+LEFT JOIN  {{ ref('dim_produk') }} p
+       ON  p.produk_id = f.produk_id
+       AND f.tanggal_transaksi >= p.mulai_berlaku
+       AND f.tanggal_transaksi <  p.selesai_berlaku
+LEFT JOIN  {{ ref('dim_toko') }} t ON t.toko_id = f.toko_id
+LEFT JOIN  {{ ref('dim_audit') }} a ON a.batch_id = f.batch_id
+\end{lstlisting}
+
+\begin{lstlisting}[style=shellgaya]
+dbt build          # run + test, mengikuti urutan graf
+\end{lstlisting}
+
+\langkah{C.3 Merekonsiliasi dengan gudang bikinan tangan}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+SELECT (SELECT SUM(subtotal) FROM dbt_mart.fct_penjualan)   AS versi_dbt,
+       (SELECT SUM(subtotal) FROM gudang.fakta_penjualan)   AS versi_tangan,
+       (SELECT SUM(subtotal) FROM dbt_mart.fct_penjualan)
+     - (SELECT SUM(subtotal) FROM gudang.fakta_penjualan)   AS selisih;
+\end{lstlisting}
+
+Keduanya membangun hal yang sama dengan cara berbeda, sehingga angkanya harus
+sama. Selisih yang muncul hampir selalu berasal dari penyaringan status atau
+penanganan baris unknown yang tidak konsisten antara kedua jalur --- dan itu
+temuan yang layak dicatat.
+
+\subsection{Bagian D: Mendokumentasikan dan Membaca Lineage}
+
+\langkah{D.1 Melengkapi schema.yml}{10 menit}
+
+\begin{lstlisting}[style=yamlgaya]
+# models/mart/schema.yml
+version: 2
+
+models:
+  - name: fct_penjualan
+    description: >
+      Fakta penjualan, satu baris per produk per baris struk. Grain sama
+      dengan gudang.fakta_penjualan yang dibangun manual pada Modul 2.
+    columns:
+      - name: produk_key
+        description: >
+          Kunci dimensi produk yang BERLAKU saat transaksi terjadi, bukan
+          versi terkini. Bernilai -1 bila produk tidak dikenali.
+      - name: audit_key
+        description: Kunci batch pemuatan yang menghasilkan baris ini.
+\end{lstlisting}
+
+\langkah{D.2 Membangun dan membaca graf lineage}{10 menit}
+
+\begin{lstlisting}[style=shellgaya]
+dbt docs generate
+dbt docs serve --port 8080
+\end{lstlisting}
+
+Buka graf lineage, lalu simpan tangkapan layarnya sebagai
+\berkas{lineage.png}. Graf harus memperlihatkan jalur utuh dari
+\perintah{source} sampai \perintah{fct\_penjualan}.
+
+\begin{peringatan}
+Model yang muncul \emph{terputus} dari graf --- tidak memiliki panah masuk ---
+hampir selalu menandakan nama tabel ditulis langsung, bukan lewat
+\perintah{source} atau \perintah{ref}. Perbaiki sebelum melanjutkan; graf yang
+bohong lebih berbahaya daripada tidak ada graf sama sekali.
+\end{peringatan}
+
+Telusuri satu model ke hulu dan satu ke hilir, lalu catat pada
+\berkas{catatan-lineage.md}: model apa yang akan ikut rusak bila
+\perintah{stg\_penjualan} diubah?
+
+\subsection{Bagian E: Menambah Audit dan Pengujian Dasar}
+
+\langkah{E.1 Membaca audit dimension}{5 menit}
+
+\begin{lstlisting}[style=sqlgaya]
+-- models/mart/dim_audit.sql
+{{ config(materialized='table') }}
+
+SELECT ROW_NUMBER() OVER (ORDER BY batch_id, sumber) AS audit_key,
+       batch_id,
+       sumber,
+       MIN(mulai)   AS waktu_muat,
+       SUM(baris_dibaca)  AS baris_dibaca,
+       SUM(baris_dimuat)  AS baris_dimuat,
+       CASE WHEN SUM(baris_dibaca) = SUM(baris_dimuat) THEN 'lengkap'
+            ELSE 'ada selisih' END AS status_mutu
+FROM   {{ source('nusamart', 'audit_muat') }}
+GROUP  BY batch_id, sumber
+\end{lstlisting}
+
+\langkah{E.2 Memasang empat uji baku}{10 menit}
+
+\begin{lstlisting}[style=yamlgaya]
+models:
+  - name: fct_penjualan
+    columns:
+      - name: transaksi_id
+        tests:
+          - not_null
+      - name: produk_key
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_produk')
+              field: produk_key
+  - name: dim_produk
+    columns:
+      - name: produk_key
+        tests:
+          - unique
+          - not_null
+\end{lstlisting}
+
+\begin{lstlisting}[style=shellgaya]
+dbt test
+dbt test --store-failures     # baris yang gagal disimpan untuk diperiksa
+\end{lstlisting}
+
+\begin{catatan}
+Uji yang gagal bukan kegagalan modul. Yang dinilai adalah kemampuan
+\emph{menafsirkan} kegagalannya: baris mana yang gagal, mengapa, dan apakah
+yang harus diperbaiki adalah datanya, transformasinya, atau justru ujinya ---
+karena kadang aturan yang ditulis memang terlalu ketat.
+\end{catatan}
+
+\begin{luaran}
+\berkas{modul-08-dbt/} berisi proyek dbt lengkap tanpa kredensial, keluaran
+\perintah{dbt build}, \berkas{lineage.png}, \berkas{catatan-lineage.md}, dan
+DDL audit dimension.
+\end{luaran}
+
+\begin{checkpoint}
+Asisten memeriksa butir berikut, sebagian dari keluaran \perintah{dbt} dan
+sebagian dari \berkas{sql/modul-08/check.sql}:
+\begin{ceklis}
+  \item \perintah{dbt debug} seluruhnya \perintah{OK};
+  \item \perintah{dbt build} berjalan tanpa galat;
+  \item seluruh model memakai \perintah{source} atau \perintah{ref}, tidak ada
+        nama tabel yang ditulis langsung;
+  \item graf lineage utuh dari source sampai \perintah{fct\_penjualan}, tanpa
+        model yang terputus;
+  \item angka \perintah{dbt\_mart.fct\_penjualan} sama dengan
+        \perintah{gudang.fakta\_penjualan};
+  \item audit dimension terisi otomatis dan setiap baris fakta memiliki
+        \perintah{audit\_key};
+  \item empat generic test terpasang dan hasilnya dilaporkan;
+  \item \berkas{profiles.yml} tidak ada di dalam repositori.
+\end{ceklis}
+\end{checkpoint}
+
+\section{Latihan Mandiri di Kelas}
+
+\latihan{Memprediksi dampak perubahan pada DAG}
+
+Anda hendak menambahkan kolom \perintah{margin} pada \perintah{stg\_penjualan}.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Sebelum melihat graf, tuliskan model apa saja yang menurut Anda ikut
+        terpengaruh.
+  \item Buktikan dengan dbt:
+\begin{lstlisting}[style=shellgaya]
+dbt ls --select stg_penjualan+      # ke hilir
+dbt ls --select +fct_penjualan      # ke hulu
+\end{lstlisting}
+  \item Bandingkan prediksi dengan hasilnya, lalu jelaskan selisihnya.
+  \item Berapa lama perkiraan Anda untuk menjawab pertanyaan yang sama pada
+        pipeline Python Modul 7, yang tidak memiliki graf?
+\end{enumerate}
+
+\latihan{Membuat satu model rusak dengan sengaja}
+
+Pada model \perintah{fct\_penjualan}, ganti pemanggilan
+\perintah{ref('dim\_produk')} dengan nama tabel yang ditulis langsung, yaitu
+\perintah{dbt\_mart.dim\_produk}.
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Jalankan \perintah{dbt build}. Apakah ia berhasil?
+  \item Jalankan \perintah{dbt docs generate}. Apa yang berubah pada graf?
+  \item Jelaskan mengapa kesalahan semacam ini lebih berbahaya daripada
+        kesalahan yang membuat build gagal.
+  \item Kembalikan ke bentuk semula.
+\end{enumerate}
+
+\section{Tugas Individu}
+
+\subsection{Pekerjaan Wajib}
+Telusuri satu angka dari mart atau dashboard sampai ke baris sumber dan tulis
+jalur lineage tersebut secara naratif.
+
+Kumpulkan \berkas{telusur-angka.md} yang memuat:
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item satu angka tertentu yang Anda pilih --- misalnya nilai penjualan
+        kategori tertentu pada bulan tertentu --- beserta nilainya;
+  \item jalur lineage-nya secara naratif, dari model mart mundur sampai baris
+        pada sistem sumber, menyebut setiap model yang dilewati;
+  \item query yang Anda jalankan pada setiap langkah untuk membuktikan bahwa
+        angka itu memang berasal dari sana;
+  \item transformasi apa saja yang dialami angka tersebut sepanjang jalan ---
+        penyaringan, konversi satuan, agregasi;
+  \item batch pemuatan mana yang menghasilkannya, dibaca dari audit dimension.
+\end{enumerate}
+
+\begin{catatan}
+Butir kelima adalah alasan audit dimension dibangun. Tanpanya, penelusuran
+berhenti pada ``baris ini ada di staging'' --- dan pertanyaan ``masuk kapan,
+dari jalan pipeline yang mana'' tidak dapat dijawab sama sekali.
+\end{catatan}
+
+\subsection{Pertanyaan Analisis}
+
+\begin{enumerate}[leftmargin=1.4em]
+  \item Seorang rekan mengganti \perintah{ref} dengan nama tabel langsung agar
+        modelnya dapat dijalankan sendiri tanpa membangun ulang seluruh
+        proyek. Sebutkan apa yang diperolehnya dan apa yang hilang, lalu
+        berikan pendirian Anda.
+  \item Uji \perintah{relationships} Anda lulus, tetapi baris fakta yang
+        menunjuk baris unknown berjumlah besar. Apakah data Anda sehat?
+        Jelaskan mengapa kedua hal itu tidak bertentangan, dan uji tambahan apa
+        yang perlu ditulis.
+  \item Dokumentasi dbt dibangun ulang setiap kali \perintah{docs generate}
+        dijalankan. Sebutkan satu jenis pengetahuan tentang data yang
+        \emph{tidak} akan pernah muncul di sana meskipun seluruh deskripsi
+        terisi, dan di mana pengetahuan itu seharusnya disimpan.
+\end{enumerate}
+
+\section{Format Pengumpulan dan Checklist}
+
+Kumpulkan proyek dbt tanpa kredensial, keluaran \perintah{dbt build}, tangkapan
+layar lineage, DDL audit dimension, dan narasi penelusuran angka.
+
+Seluruh berkas diletakkan pada \berkas{modul-08-dbt/}.
+
+\begin{ceklis}
+  \item \berkas{pre-lab.md}
+  \item Proyek dbt lengkap: \berkas{dbt\_project.yml}, \berkas{models/},
+        \berkas{macros/}
+  \item \berkas{profiles.yml.example} --- \textbf{tanpa} kredensial
+  \item \berkas{keluaran-dbt-build.txt}
+  \item \berkas{lineage.png} dan \berkas{catatan-lineage.md}
+  \item \berkas{telusur-angka.md}
+  \item \berkas{jawaban-analisis.md}
+  \item Riwayat commit memperlihatkan model ditambahkan bertahap, bukan
+        sekaligus di akhir.
+\end{ceklis}
+
+\section{Troubleshooting}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Masalah yang lazim muncul pada Modul 8 dan penanganannya}
+\label{tab:m8-troubleshooting}
+\begin{tabular}{@{}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.62\textwidth}@{}}
+\toprule
+\textbf{Gejala} & \textbf{Penanganan} \\
+\midrule
+\perintah{Could not find profile named 'nusamart'} &
+  Nama profil pada \berkas{dbt\_project.yml} berbeda dengan kunci teratas
+  \berkas{profiles.yml}. Keduanya harus sama persis. \\
+\perintah{Env var required but not provided: 'DW\_PASSWORD'} &
+  Variabel lingkungan belum diekspor pada sesi terminal ini. Jalankan
+  \perintah{export} lebih dahulu. \\
+\perintah{Compilation Error ... depends on a node named ... which was not
+  found} &
+  Nama model pada \perintah{ref} salah ketik, atau berkasnya berada di luar
+  direktori \berkas{models/}. Nama yang dipakai adalah nama berkas tanpa
+  \berkas{.sql}. \\
+\perintah{Database Error ... relation "staging.xxx" does not exist} &
+  Schema atau nama tabel pada \berkas{sources.yml} keliru, atau pipeline
+  Modul 7 belum dijalankan. \\
+Model muncul terputus pada graf &
+  Nama tabel ditulis langsung, bukan lewat \perintah{source} atau
+  \perintah{ref}. Build tetap berhasil --- inilah yang membuatnya berbahaya. \\
+\perintah{dbt docs serve} menampilkan halaman kosong &
+  \perintah{dbt docs generate} belum dijalankan, atau dijalankan dari
+  direktori yang bukan akar proyek. \\
+Uji \perintah{unique} gagal pada dimensi SCD-2 &
+  Wajar dan benar: satu natural key memang punya beberapa versi. Uji
+  \perintah{unique} dipasang pada surrogate key, bukan natural key. \\
+Uji \perintah{relationships} gagal untuk kunci $-1$ &
+  Baris unknown belum ada pada model dimensi versi dbt. Tambahkan, sebagaimana
+  Modul 5. \\
+Angka dbt berbeda dengan gudang bikinan tangan &
+  Paling sering karena penyaringan status atau penanganan unknown tidak
+  konsisten antara kedua jalur. Bandingkan klausa \perintah{WHERE}
+  keduanya. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ringkasan}
+
+Modul ini memindahkan transformasi dari skrip yang dijalankan manual menjadi
+kode yang menyusun urutannya sendiri, mendokumentasikan dirinya, dan
+menghasilkan graf ketergantungannya sebagai efek samping.
+
+Tiga gagasan perlu dibawa ke Modul 9 dan 10. \emph{Pertama}, ketergantungan
+yang dinyatakan lewat \perintah{ref} adalah satu-satunya sumber kebenaran graf
+lineage --- menuliskan nama tabel secara langsung tetap menghasilkan SQL yang
+berjalan, tetapi graf yang bohong. \emph{Kedua}, metadata teknis paling
+berguna ketika melekat pada barisnya: audit dimension mengubah pertanyaan
+``baris ini dari mana'' dari penyelidikan menjadi satu join. \emph{Ketiga},
+uji baku dbt menangkap kerusakan struktural, tetapi tidak menangkap angka yang
+salah secara halus --- untuk itu diperlukan aturan yang dirancang khusus, dan
+itulah Modul 10.
+
+Modul 9 memakai schema \perintah{mart} yang kini memiliki dua penghuni ---
+hasil kerja tangan dan hasil kerja dbt --- untuk membangun dashboard yang
+menjawab pertanyaan bisnis yang Anda rumuskan pada Modul 1. Lingkaran
+praktikum ditutup di sana.

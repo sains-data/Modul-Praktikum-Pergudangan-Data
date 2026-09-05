@@ -1,0 +1,43 @@
+# =============================================================================
+# Definisi source: tabel yang TIDAK dibangun dbt.
+#
+# Isi schema staging dihasilkan pipeline ETL Modul 7. Menyebutnya sebagai
+# source, bukan menulis nama tabelnya langsung, adalah satu-satunya cara agar
+# ia muncul sebagai simpul hulu pada graf lineage.
+# =============================================================================
+version: 2
+
+sources:
+  - name: nusamart
+    description: >
+      Tabel staging hasil pipeline ETL Modul 7. Berisi salinan tiga sumber
+      operasional NusaMart yang satuan dan kode kategorinya sudah
+      distandardisasi, tetapi belum dipetakan ke surrogate key.
+    database: nusamart_dw
+    schema: staging
+    tables:
+      - name: penjualan_gabungan
+        description: >
+          Satu baris per produk per baris struk, digabung dari tiga sumber.
+          Baris berstatus BATAL masih ada di sini dan disaring pada lapis
+          staging -- staging menampung, bukan menolak.
+        columns:
+          - name: transaksi_id
+            description: Nomor transaksi pada sistem sumber.
+          - name: sumber
+            description: Sistem asal baris ini -- oltp, barat, atau timur.
+          - name: batch_id
+            description: Batch pemuatan yang membawa baris ini masuk.
+
+      - name: produk_gabungan
+        description: >
+          Produk dari tiga sumber. Berat SUDAH dalam gram; konversi dari
+          kilogram dilakukan pada tahap transform Modul 7.
+
+      - name: toko_gabungan
+        description: Toko dari tiga sumber.
+
+      - name: audit_muat
+        description: >
+          Catatan setiap jalannya pipeline: berapa baris dibaca, dimuat, dan
+          ditolak per sumber. Menjadi bahan dim_audit.

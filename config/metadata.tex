@@ -1,0 +1,52 @@
+% -----------------------------------------------------------------------------
+% Identitas mata kuliah dan dokumen.
+% Nilai di berkas ini dipakai oleh sampul, halaman judul, halaman hak cipta,
+% kepala halaman, dan metadata PDF.
+% -----------------------------------------------------------------------------
+\newcommand{\coursecode}{SD25-31007}
+\newcommand{\coursename}{Pergudangan Data}
+\newcommand{\programname}{Sains Data}
+\newcommand{\facultyname}{Fakultas Sains}
+\newcommand{\universityname}{Institut Teknologi Sumatera}
+
+\newcommand{\jenisdokumen}{Modul Praktikum}
+\newcommand{\docsemester}{Semester Ganjil 2025/2026}
+
+% -----------------------------------------------------------------------------
+% Penyusun.
+%
+% SESUAIKAN sebelum dokumen diterbitkan. Bila disusun beberapa orang, pisahkan
+% dengan \\ agar tercetak sebagai beberapa baris pada halaman judul.
+% -----------------------------------------------------------------------------
+\newcommand{\penyusun}{Tim Pengampu Mata Kuliah \coursename}
+\newcommand{\penyusundetail}{%
+  Program Studi \programname\\
+  \facultyname, \universityname}
+
+% -----------------------------------------------------------------------------
+% Versi dan penerbitan.
+%
+% Naikkan \docversion setiap kali naskah berubah secara berarti, lalu tambahkan
+% barisnya pada tabel riwayat versi di section/00d-pendahuluan.tex. Keduanya
+% harus selalu sejalan.
+% -----------------------------------------------------------------------------
+\newcommand{\docversion}{1.0}
+\newcommand{\doctanggal}{September 2026}
+\newcommand{\doccetakan}{Edisi Pertama}
+\newcommand{\pemeganghakcipta}{%
+  Program Studi \programname, \facultyname, \universityname}
+
+% -----------------------------------------------------------------------------
+% Repositori dan dokumen pendamping.
+% -----------------------------------------------------------------------------
+\newcommand{\repositori}{https://github.com/sains-data/Modul-Praktikum-Pergudangan-Data}
+\newcommand{\bukupendamping}{Rubrik Penilaian Praktikum \coursename}
+
+\hypersetup{
+  pdftitle={\jenisdokumen\ \coursename},
+  pdfauthor={\penyusun},
+  pdfsubject={\coursecode\ \coursename\ -- \programname, \universityname},
+  pdfkeywords={gudang data, skema bintang, ETL, OLAP, kualitas data,
+               PostgreSQL, dbt, praktikum},
+  pdfcreator={LaTeX},
+}

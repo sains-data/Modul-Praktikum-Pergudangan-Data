@@ -1,0 +1,29 @@
+# =============================================================================
+# Modul 08 -- Proyek dbt NusaMart (kerangka setengah jadi)
+#
+# Nama profil di bawah harus sama persis dengan kunci teratas pada
+# ~/.dbt/profiles.yml. Ketidakcocokan keduanya adalah penyebab galat
+# "Could not find profile named ..." yang paling sering.
+# =============================================================================
+name: nusamart
+version: 1.0.0
+config-version: 2
+
+profile: nusamart
+
+model-paths:   ["models"]
+macro-paths:   ["macros"]
+test-paths:    ["tests"]
+target-path:   "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  nusamart:
+    staging:
+      # View: murah dibangun, selalu segar.
+      +materialized: view
+      +schema: staging
+    mart:
+      # Table: mahal dibangun, murah dibaca. Pertukaran yang sama seperti
+      # yang diukur pada Modul 6.
+      +materialized: table
