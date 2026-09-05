@@ -44,3 +44,8 @@ seed/northwind.sql
 target/
 dbt_packages/
 logs/
+
+assets/
+section/
+rubrik/
+config/
