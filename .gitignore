@@ -14,7 +14,6 @@
 # Local configuration and credentials
 .env
 .env.*
-!.env.example
 
 # Python and notebooks
 __pycache__/
@@ -53,3 +52,5 @@ config/
 
 main.tex
 references.bib
+
+!etl/config
