@@ -45,6 +45,7 @@ target/
 dbt_packages/
 logs/
 
+# Folder lokal / tidak ikut version control
 assets/
 section/
 rubrik/
