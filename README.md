@@ -1,8 +1,7 @@
 # Modul Praktikum Pergudangan Data
 
 Direktori ini memuat naskah dan artefak pendukung untuk sepuluh modul praktikum
-Pergudangan Data. Naskah dikompilasi dari `main.tex` menjadi
-`modul-praktikum-pergudangan-data.pdf`.
+Pergudangan Data.
 
 ## Menyiapkan lingkungan
 
